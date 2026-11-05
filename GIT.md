@@ -42,19 +42,43 @@ git log --oneline
 git checkout -- app/main.py
 ```
 
-## 连接到远端仓库
+## 远端仓库
 
-先在 GitLab / GitHub / Gitee 上建一个**空的**仓库（不要勾选初始化 README），然后：
+已配置：
+
+```
+origin  https://github.com/p21225jp/product-image-library.git
+```
+
+首次推送（需要 GitHub 认证）：
 
 ```powershell
-git remote add origin <你的仓库地址>
+cd "H:\AI本地文档\开发\product-image-library"
 git push -u origin main
 ```
+
+认证方式二选一：
+
+1. **浏览器弹窗登录**：如果 Git 配置了 Credential Manager，会弹出 GitHub 登录窗口，登录即可。
+2. **用个人访问令牌（PAT）**：在 GitHub「Settings → Developer settings → Personal access tokens」生成，
+   权限选 `Contents: Read and write`。推送时用户名填 GitHub 用户名，密码位置粘贴令牌。
 
 之后每次推送：
 
 ```powershell
 git push
+```
+
+## 提交前自检
+
+推送前建议确认没有把内部信息带出去：
+
+```powershell
+# 确认 data/ 没被跟踪
+git ls-files | Select-String "^data/"
+
+# 提交前看一眼将要推上去的内容
+git log --oneline origin/main..HEAD
 ```
 
 ### 推送前请确认
