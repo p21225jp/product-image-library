@@ -1,0 +1,23 @@
+# Create the assetlibrary service user, install dependencies, restore data, and
+# adapt the paths before installing as /etc/systemd/system/product-image-library.service.
+[Unit]
+Description=Company product image library
+After=network.target
+
+[Service]
+Type=simple
+User=assetlibrary
+Group=assetlibrary
+WorkingDirectory=/opt/product-image-library
+EnvironmentFile=/etc/product-image-library.env
+ExecStartPre=/usr/bin/test -s ${ASSET_DATA_DIR}/library.sqlite3
+ExecStart=/opt/product-image-library/.venv/bin/python /opt/product-image-library/serve.py --host 127.0.0.1 --port 8750
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

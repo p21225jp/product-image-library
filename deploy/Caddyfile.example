@@ -1,0 +1,18 @@
+# Replace the example domain and certificate paths before use.
+# Internal DNS and company VPN DNS must resolve this domain to the server's LAN IP.
+{
+    auto_https disable_redirects
+}
+
+https://assets.company.example {
+    # Use a certificate issued for this domain by a CA trusted on employee computers.
+    # On Windows use quoted paths such as "D:/AssetLibrary/certs/fullchain.pem".
+    tls /etc/product-image-library/fullchain.pem /etc/product-image-library/private.key
+
+    # Administrators are initialized locally before enabling this entry point.
+    @setup path /api/setup /api/setup/*
+    respond @setup "Initialize the administrator locally on the server." 403
+
+    # No file_server: originals, thumbnails and the database stay behind app authorization.
+    reverse_proxy 127.0.0.1:8750
+}

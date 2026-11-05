@@ -1,0 +1,24 @@
+# 运行时数据：真实素材、数据库、备份。含密码与令牌哈希，绝不入库。
+data/
+exports/
+*.log
+.env
+
+# Python 环境与缓存
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+
+# 测试运行时产生的临时清单
+tests/.associate-qa.json
+tests/.category-delete-qa.json
+tests/.product-pages-qa.json
+tests/.remove-ai-qa.json
