@@ -357,6 +357,41 @@ def test_upload_defaults_match_transparent_workflow(logged):
     assert upload(logged, alpha=False).status_code == 400
 
 
+def test_product_deletion_unbinds_images_and_is_admin_only(logged):
+    entry = product(logged)
+    keep = upload(logged, entry['id']).json()['image']
+    # Distinct pixel content so the duplicate-detection layer keeps both rows.
+    trashed = upload(logged, entry['id'], data=png(color=(0, 0, 255, 200))).json()['image']
+    assert trashed['id'] != keep['id']
+    logged.delete('/api/images/' + trashed['id'])
+
+    preview = logged.get('/api/products/' + entry['id'] + '/deletion-preview')
+    assert preview.status_code == 200, preview.text
+    assert preview.json()['image_count'] == 1
+    assert preview.json()['trashed_image_count'] == 1
+
+    main.login_attempts.clear()
+    logged.post('/api/accounts', json={'username': 'inner-del', 'password': 'inner-password-1', 'role': 'staff'})
+    logged.post('/api/accounts', json={'username': 'outer-del', 'password': 'outer-password-1', 'role': 'external'})
+    with TestClient(main.app, base_url='http://localhost', client=('192.168.1.71', 7300)) as member, \
+         TestClient(main.app, base_url='http://localhost', client=('192.168.1.72', 7301)) as outer:
+        member.post('/api/login', json={'username': 'inner-del', 'password': 'inner-password-1'})
+        outer.post('/api/login', json={'username': 'outer-del', 'password': 'outer-password-1'})
+        # Internal accounts may edit products but never delete them.
+        assert member.get('/api/products/' + entry['id'] + '/deletion-preview').status_code == 403
+        assert member.request('DELETE', '/api/products/' + entry['id']).status_code == 403
+        assert outer.request('DELETE', '/api/products/' + entry['id']).status_code == 403
+
+    assert logged.request('DELETE', '/api/products/' + entry['id']).status_code == 200
+    assert logged.get('/api/products').json()['total'] == 0
+    # The product is gone but both images survive as unassigned material.
+    assert logged.get('/api/images').json()['total'] == 1
+    assert logged.get('/api/images?unassigned=true').json()['items'][0]['id'] == keep['id']
+    assert logged.get('/api/images?trash=true').json()['total'] == 1
+    assert logged.get('/api/products/' + entry['id'] + '/deletion-preview').status_code == 404
+    assert logged.request('DELETE', '/api/products/' + entry['id']).status_code == 404
+
+
 def test_role_capability_matrix(logged):
     """Administrator keeps every power; internal accounts read, download, upload and edit but never delete."""
     entry = product(logged)

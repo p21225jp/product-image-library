@@ -196,7 +196,7 @@ async function loadProducts(){
       return await loadProducts();
     }
     state.products=result.items;state.productTotal=result.total;
-    $('product-table').innerHTML=`<div class="table-wrap"><table><thead><tr><th>产品 SKU</th><th>产品名称</th><th>产品分类</th><th>图片</th><th>管理</th></tr></thead><tbody>${result.items.map(item=>`<tr><td><span class="code">${escapeHtml(item.code)}</span></td><td><strong>${escapeHtml(item.name)}</strong><div class="subtext">${escapeHtml(item.aliases.join(' · '))}</div></td><td>${escapeHtml(item.category||'未分类')}</td><td>${item.image_count} 张</td><td>${(state.status.role==='admin'||state.status.role==='staff')?`<button class="text-button" data-associate-product="${item.id}">去关联</button> <button class="text-button" data-edit-product="${item.id}">编辑</button>`:''} <button class="text-button" data-product-images="${escapeHtml(item.code)}">查看图片</button></td></tr>`).join('')||'<tr><td colspan="5" class="table-empty">'+(($('product-search').value.trim()||$('product-filter-category').value)?'没有找到符合条件的产品，试试更换分类或清空搜索。':'暂无产品。点击「新建产品」，建立第一个产品索引。')+'</td></tr>'}</tbody></table></div>`;
+    $('product-table').innerHTML=`<div class="table-wrap"><table><thead><tr><th>产品 SKU</th><th>产品名称</th><th>产品分类</th><th>图片</th><th>管理</th></tr></thead><tbody>${result.items.map(item=>`<tr><td><span class="code">${escapeHtml(item.code)}</span></td><td><strong>${escapeHtml(item.name)}</strong><div class="subtext">${escapeHtml(item.aliases.join(' · '))}</div></td><td>${escapeHtml(item.category||'未分类')}</td><td>${item.image_count} 张</td><td>${(state.status.role==='admin'||state.status.role==='staff')?`<button class="text-button" data-associate-product="${item.id}">去关联</button> <button class="text-button" data-edit-product="${item.id}">编辑</button>`:''}${state.status.role==='admin'?` <button class="text-button danger" data-delete-product="${item.id}">删除</button>`:''} <button class="text-button" data-product-images="${escapeHtml(item.code)}">查看图片</button></td></tr>`).join('')||'<tr><td colspan="5" class="table-empty">'+(($('product-search').value.trim()||$('product-filter-category').value)?'没有找到符合条件的产品，试试更换分类或清空搜索。':'暂无产品。点击「新建产品」，建立第一个产品索引。')+'</td></tr>'}</tbody></table></div>`;
   }catch(error){
     if(seq!==state.productRequest||state.view!=='products')return;
     state.products=[];state.productError=true;
@@ -270,7 +270,47 @@ async function createCategory() {
 $('create-category').onclick=createCategory;
 $('new-category-name').onkeydown=event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();createCategory();}};
 $('new-product').onclick=guarded(()=>openProduct());
-$('product-table').onclick=guarded(async event=>{if(state.productLoading)return;if(event.target.closest('[data-retry-products]')){await loadProducts();return;}const associate=event.target.closest('[data-associate-product]');if(associate){await openAssociation(state.products.find(item=>item.id===associate.dataset.associateProduct));return;}const edit=event.target.closest('[data-edit-product]');const view=event.target.closest('[data-product-images]');if(edit)await openProduct(state.products.find(item=>item.id===edit.dataset.editProduct));if(view){state.productCode=view.dataset.productImages;$('search').value=view.dataset.productImages;for(const key of ['kind','angle','background','category'])$('filter-'+key).value='';await switchView('library');}});
+$('product-table').onclick=guarded(async event=>{if(state.productLoading)return;if(event.target.closest('[data-retry-products]')){await loadProducts();return;}const associate=event.target.closest('[data-associate-product]');if(associate){await openAssociation(state.products.find(item=>item.id===associate.dataset.associateProduct));return;}const remove=event.target.closest('[data-delete-product]');if(remove){await openProductDelete(remove.dataset.deleteProduct);return;}const edit=event.target.closest('[data-edit-product]');const view=event.target.closest('[data-product-images]');if(edit)await openProduct(state.products.find(item=>item.id===edit.dataset.editProduct));if(view){state.productCode=view.dataset.productImages;$('search').value=view.dataset.productImages;for(const key of ['kind','angle','background','category'])$('filter-'+key).value='';await switchView('library');}});
+const productDeleteUI={preview:null,busy:false};
+const productDelete=document.createElement('dialog');
+productDelete.id='product-delete';productDelete.className='category-delete';
+productDelete.setAttribute('aria-labelledby','product-delete-title');
+productDelete.innerHTML=`<div class="category-dialog-heading"><div><span class="eyebrow">DELETE PRODUCT</span><h2 id="product-delete-title">删除产品</h2></div><button type="button" id="product-delete-close" class="dialog-close" aria-label="关闭删除产品确认">×</button></div>`+
+  `<p class="category-delete-name" id="product-delete-name"></p><div class="category-delete-counts"><div><strong id="product-delete-images">0</strong><span>张图片回到待整理</span></div><div><strong id="product-delete-trash">0</strong><span>张回收站图片解除关联</span></div></div>`+
+  `<div class="category-delete-explanation"><p>产品记录会从目录中移除，图片原文件全部保留，只是不再关联到这个产品。</p><p>图片会回到「待整理」，可以重新关联到其他产品。此操作无法撤销。</p></div>`+
+  `<div id="product-delete-error" class="form-error" role="alert"></div><div class="category-delete-footer"><button type="button" id="product-delete-cancel" class="button secondary">取消</button><button type="button" id="product-delete-submit" class="button category-danger">确认删除</button></div>`;
+document.body.append(productDelete);
+function closeProductDelete(){if(!productDeleteUI.busy)productDelete.close();}
+$('product-delete-close').onclick=closeProductDelete;$('product-delete-cancel').onclick=closeProductDelete;
+productDelete.addEventListener('close',()=>{productDeleteUI.preview=null;});
+productDelete.addEventListener('cancel',event=>{if(productDeleteUI.busy)event.preventDefault();});
+async function openProductDelete(id){
+  $('product-delete-error').textContent='';$('product-delete-submit').disabled=true;
+  $('product-delete-name').textContent='正在读取影响范围…';
+  $('product-delete-images').textContent='0';$('product-delete-trash').textContent='0';
+  productDelete.showModal();
+  try {
+    const impact=await api('/api/products/'+id+'/deletion-preview');
+    productDeleteUI.preview=impact;
+    $('product-delete-name').textContent=`将删除产品「${impact.code} ${impact.name}」`;
+    $('product-delete-images').textContent=impact.image_count;
+    $('product-delete-trash').textContent=impact.trashed_image_count;
+    $('product-delete-submit').disabled=false;
+  } catch(error){$('product-delete-error').textContent=error.message;}
+}
+$('product-delete-submit').onclick=guarded(async()=>{
+  const impact=productDeleteUI.preview;if(!impact)return;
+  productDeleteUI.busy=true;
+  const controls=['product-delete-submit','product-delete-cancel','product-delete-close'];
+  controls.forEach(id=>$(id).disabled=true);$('product-delete-submit').textContent='正在删除…';$('product-delete-error').textContent='';
+  try {
+    await api('/api/products/'+impact.id,{method:'DELETE'});
+    productDeleteUI.busy=false;productDelete.close();
+    toast(`产品「${impact.code}」已删除，${impact.image_count} 张图片回到待整理`);
+    await loadProductCategories();await loadProducts();await loadOverview();
+  } catch(error){$('product-delete-error').textContent=error.message;}
+  finally {productDeleteUI.busy=false;controls.forEach(id=>$(id).disabled=false);$('product-delete-submit').textContent='确认删除';}
+});
 $('product-form').onsubmit=guarded(async event=>{event.preventDefault();if($('create-category').disabled)return;if(!$('category-create').classList.contains('hidden')&&$('new-category-name').value.trim()){toast('请先创建分类，或取消新增。',true);return;}const button=event.submitter||$('product-form').querySelector('[type="submit"]');button.disabled=true;try{const body={};for(const key of ['code','name','category'])body[key]=$('product-'+key).value;body.aliases=splitTags($('product-aliases').value);const id=$('edit-product-id').value;await api('/api/products'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});$('product-dialog').close();toast(id?'产品资料已更新':'产品已创建');if(!id)state.productOffset=0;await loadOverview();if(state.view==='products')await loadProducts();else await loadImages();}finally{button.disabled=false;}});
 const productSelectRequests={};
 async function fillProductSelect(prefix, selected='', q='') {const sequence=(productSelectRequests[prefix]||0)+1;productSelectRequests[prefix]=sequence;const result=await api('/api/products?q='+encodeURIComponent(q)+'&limit=200');if(sequence!==productSelectRequests[prefix])return;const select=$(prefix+'-product');const previous=Array.from(select.options).find(option=>option.value===selected);select.replaceChildren(new Option('暂不关联产品',''));result.items.forEach(item=>select.add(new Option(`${item.code} · ${item.name}`,item.id)));if(selected&&!result.items.some(item=>item.id===selected)&&previous)select.add(new Option(previous.text,selected));select.value=selected;}

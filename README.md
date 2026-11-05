@@ -6,6 +6,7 @@
 
 - 首次在服务器本机创建管理员；密码使用 scrypt 哈希，8 小时登录会话。
 - 产品 SKU 按文本保存，保留前导零；支持名称、单选分类、别名；分类选项可在新建或编辑产品时创建，并自动选中。
+- 产品删除（仅管理员）：确认弹窗显示受影响的图片数量；删除产品记录后，其图片全部保留并回到「待整理」，原图文件不受影响。
 - JPG / PNG / WebP 多文件顺序上传；每张 25 MB、4000 万像素以内，每批前台最多 30 张。
 - 原文件原样保留；另生成 WebP 缩略图。自动识别真实透明像素。
 - 同一产品内按 SHA-256 提示重复；允许同一张素材关联不同产品。
@@ -167,6 +168,8 @@ MCP 适配器不返回图片像素、Base64 或图片内容块；下载在本机
 
 ```text
 GET  /api/products?q=001234
+GET  /api/products/{id}/deletion-preview   删除前的影响数量（管理员）
+DELETE /api/products/{id}                   删除产品，图片解绑后保留（管理员）
 GET  /api/images?product_code=001234&background=透明&angle=正面&min_width=2000
 GET  /api/images/{image_id}
 GET  /api/images/{image_id}/file

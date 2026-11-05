@@ -793,6 +793,42 @@ def update_product(identifier: str, body: ProductInput, actor: str = Depends(sta
     return {'ok': True}
 
 
+def product_deletion_snapshot(con, product_id: str) -> dict:
+    """What removing this product would touch, so the dialog can warn precisely."""
+    row = con.execute('SELECT id,code,name FROM products WHERE id=?', (product_id,)).fetchone()
+    if not row:
+        fail(404, '产品不存在，请刷新产品目录。')
+    counts = con.execute('''SELECT
+        (SELECT count(*) FROM images WHERE product_id=? AND deleted_at IS NULL) active,
+        (SELECT count(*) FROM images WHERE product_id=? AND deleted_at IS NOT NULL) trashed''',
+        (product_id, product_id)).fetchone()
+    return {'id': row['id'], 'code': row['code'], 'name': row['name'],
+            'image_count': counts['active'], 'trashed_image_count': counts['trashed']}
+
+
+@app.get('/api/products/{identifier}/deletion-preview')
+def preview_product_deletion(identifier: str, actor: str = Depends(admin)):
+    with db() as con:
+        return product_deletion_snapshot(con, identifier)
+
+
+@app.delete('/api/products/{identifier}')
+def delete_product(identifier: str, actor: str = Depends(admin)):
+    """Remove the product record. Its images stay in the library and become unassigned."""
+    with db() as con:
+        con.execute('BEGIN IMMEDIATE')
+        impact = product_deletion_snapshot(con, identifier)
+        # Unbind active and trashed images alike, so a later restore cannot resurrect the link.
+        con.execute('UPDATE images SET product_id=NULL WHERE product_id=?', (identifier,))
+        con.execute('DELETE FROM products WHERE id=?', (identifier,))
+        con.execute('INSERT INTO audit(action,actor,detail,created_at) VALUES(?,?,?,?)',
+                    ('删除产品', actor,
+                     f"{impact['code']} {impact['name']}；解绑 {impact['image_count']} 张有效图片、"
+                     f"{impact['trashed_image_count']} 张回收站图片。",
+                     int(time.time())))
+    return {'deleted': True, **impact}
+
+
 IMAGE_SELECT = '''SELECT i.*,p.code product_code,p.name product_name,p.category
                   FROM images i LEFT JOIN products p ON p.id=i.product_id'''
 
