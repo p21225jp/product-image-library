@@ -39,7 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\set-token.ps1
 如果服务不在本机默认地址，加参数：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\set-token.ps1 -ServerUrl http://10.10.40.190:8750
+powershell -NoProfile -ExecutionPolicy Bypass -File .\set-token.ps1 -ServerUrl http://192.168.1.100:8750
 ```
 
 ### 3. 重启 MCP 客户端

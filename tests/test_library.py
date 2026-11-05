@@ -290,7 +290,7 @@ def test_staff_account_issues_tokens_and_can_upload(logged):
     main.login_attempts.clear()
     created = logged.post('/api/accounts', json={'username': 'designer', 'password': 'designer-password-1', 'role': 'staff'})
     assert created.status_code == 200, created.text
-    with TestClient(main.app, base_url='http://localhost', client=('10.10.40.60', 2000)) as member:
+    with TestClient(main.app, base_url='http://localhost', client=('192.168.1.60', 2000)) as member:
         assert member.post('/api/login', json={'username': 'designer', 'password': 'designer-password-1'}).status_code == 200
         status = member.get('/api/status').json()
         assert status['role'] == 'staff' and status['can_issue_tokens'] is True
@@ -328,7 +328,7 @@ def test_staff_account_issues_tokens_and_can_upload(logged):
     # One staff account cannot see or revoke another account's tokens.
     other = logged.post('/api/accounts', json={'username': 'other-staff', 'password': 'other-password-1', 'role': 'staff'})
     assert other.status_code == 200
-    with TestClient(main.app, base_url='http://localhost', client=('10.10.40.61', 2001)) as peer:
+    with TestClient(main.app, base_url='http://localhost', client=('192.168.1.61', 2001)) as peer:
         peer.post('/api/login', json={'username': 'other-staff', 'password': 'other-password-1'})
         assert peer.get('/api/tokens').json()['items'] == []
         assert peer.delete('/api/tokens/' + issued.json()['id']).status_code == 403

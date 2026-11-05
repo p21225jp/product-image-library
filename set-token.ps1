@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Rotate the read-only API token used by mcp_bridge.py without exposing it on the command line.
 
@@ -12,7 +12,7 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File .\set-token.ps1
 
 .EXAMPLE
-    powershell -NoProfile -ExecutionPolicy Bypass -File .\set-token.ps1 -ServerUrl http://10.10.40.190:8750
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\set-token.ps1 -ServerUrl http://192.168.1.100:8750
 #>
 param(
     [string]$ServerUrl = 'http://127.0.0.1:8750',
