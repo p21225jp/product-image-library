@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 jacksonYWJ
+
 """Coordinate file removal and backups across the web server and maintenance CLI."""
 import os
 import threading

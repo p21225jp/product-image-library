@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 jacksonYWJ
+
 """One-way cleanup for retired features in older databases and backups."""
 import re
 

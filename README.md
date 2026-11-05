@@ -248,3 +248,25 @@ POST /api/export                     {"image_ids": ["图片ID"]}
 产品 SKU 对应接口中的 `code` / `product_code` 字段，已有接口参数保持兼容。产品分类为单选，可以保留“未分类”；点击“新增分类”可创建共用选项。已有产品的分类在启动时自动加入选项列表。
 
 品牌字段已从接口和网页下线：新建、修改产品的请求中即使带有 `brand` 也会被忽略，搜索与 `/api/overview` 不再返回品牌。数据库中的历史品牌值原样保留，未做迁移，需要时可由维护人员直接查询数据库。
+
+## 许可证
+
+Copyright (C) 2026 jacksonYWJ
+
+本项目以 GNU Affero General Public License v3.0 或更新版本（AGPL-3.0-or-later）授权，完整条款见 [LICENSE](LICENSE)。
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+**关于网络使用**：AGPL 第 13 条要求，若有人修改本程序并让它通过网络向其他用户提供服务，必须向这些用户提供修改后的完整源码。这是 AGPL 与 GPL 的关键区别，用于防止把本程序改成闭源的付费服务。
+
+SPDX 标识：`AGPL-3.0-or-later`

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (C) 2026 jacksonYWJ
+
 """Local stdio adapter. Image bytes are saved locally, never returned as MCP content."""
 from __future__ import annotations
 
