@@ -197,7 +197,7 @@ async def lifespan(application):
 
 
 initialize()
-app = FastAPI(title='素材柜 · 内网产品图片库', version='0.1.0', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app = FastAPI(title='MKT团队素材空间', version='0.1.0', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 
 
 @app.exception_handler(TimeoutError)
