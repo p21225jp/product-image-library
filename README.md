@@ -22,7 +22,7 @@
   - **外部账号**（external）：只能浏览、搜索、下载；不能上传、修改、删除，**不能创建或查看任何令牌**。
 - 删除账号会立即作废其登录会话，并同时删除该账号创建的令牌；重置密码同样会强制该账号重新登录。
 - 可按账号创建和撤销的 API 令牌（记录归属人与最后使用时间）；操作记录。
-- 本地 stdio MCP 取图工具：`search_products`、`search_images`、`get_image_info`、`export_images`。
+- 本地 stdio MCP 取图工具：`search_products`、`search_images`、`get_image_info`、`export_images`、`export_images_zip`。
 
 ## 启动
 
@@ -146,6 +146,9 @@ $env:ASSET_DATA_DIR = 'D:\CompanyAssetLibrary'
 | `search_images(product_code, query, kind, angle, background, min_width, limit, offset)` | 查询图片，返回图片 ID 和文字属性 |
 | `get_image_info(image_id)` | 核对格式、尺寸、产品归属 |
 | `export_images(image_ids)` | 一次下载最多 30 张原图到预设目录，不覆盖已有文件 |
+| `export_images_zip(image_ids)` | 服务端打包后，只下载一个 ZIP；每次最多 100 张、原图合计 500 MiB，不在本机解压 |
+
+本机 MCP 新增 `export_images_zip` 后，批量打包优先使用它：一次请求 `/api/export`，以流式方式保存压缩包，检查图片数量与 ZIP 完整性，成功后只保留 ZIP。单张原图继续使用 `export_images`。大包下载建议在客户端将该连接的 `tool_timeout_sec` 设为 `600`；这不会改变单次原图合计 500 MiB 的服务端限制。已运行的客户端需重新加载 MCP 连接才能发现新增工具。此处代码更新不会自动更新云端站点提供的取图脚本下载文件。
 
 示例指令：
 

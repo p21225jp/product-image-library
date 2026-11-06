@@ -31,7 +31,7 @@ async def run_check():
                     async with ClientSession(read, write) as session:
                         await session.discover()
                         listed = await session.list_tools()
-                        assert {item.name for item in listed.tools} == {'search_products','search_images','get_image_info','export_images'}
+                        assert {item.name for item in listed.tools} == {'search_products','search_images','get_image_info','export_images','export_images_zip'}
                         found = await session.call_tool('search_images', {'product_code':'001234','background':'透明','min_width':2000})
                         assert not found.is_error, found
                         missing = await session.call_tool('search_images', {'product_code':'1234'})
@@ -45,7 +45,7 @@ async def run_check():
                         files = list(Path(destination).glob('*.png'))
                         assert len(files) == 1
                         assert hashlib.sha256(files[0].read_bytes()).digest() == hashlib.sha256(expected).digest()
-                        print('PASS: MCP discovery, four tools, exact product filtering, transparent/min-width search, local original-byte export, text-only result.')
+                        print('PASS: MCP discovery, five tools, exact product filtering, transparent/min-width search, local original-byte export, text-only result.')
         finally:
             client.delete('/api/tokens/' + token['id']).raise_for_status()
 
