@@ -56,7 +56,8 @@ await call('/api/images/'+key,'DELETE',null,admin);await call('/api/images/delet
 const st=(await call('/api/tokens','POST',{name:'staff token'},sc)).value.token;
 await call('/api/accounts/'+staff.id,'DELETE',null,admin);await call('/api/products','GET',null,sc,401);await call('/api/products','GET',null,st,401);
 await call('/api/accounts/'+external.id,'PUT',{password:'new-test-password-456'},admin);await call('/api/products','GET',null,ec,401);
-await call('/api/migration/verify','GET',null,'',403);
-await call('/api/migration/complete','POST',{},'',200,{'x-migration-key':env.MIGRATION_KEY});await call('/api/migration/verify','GET',null,'',410,{'x-migration-key':env.MIGRATION_KEY});
+await call('/api/migration/verify','GET',null,'',401);
+await call('/api/migration/records','POST',{},admin,404);
+await call('/api/migration/complete','POST',{},admin,404);
 await call('/api/logout','POST',{},admin);await call('/api/products','GET',null,admin,401);
 console.log(`PASS: ${calls} API assertions plus original byte equality, streaming ZIP, role isolation and transactional delete guards.`);

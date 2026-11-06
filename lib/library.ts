@@ -4,7 +4,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import { zipStream } from './zip';
 import { inspectImage } from './image-format';
 
-type Env = { DB:D1Database; BUCKET:R2Bucket; MIGRATION_KEY?:string };
+type Env = { DB:D1Database; BUCKET:R2Bucket };
 type Actor = { role:string; id?:string|null; token?:boolean; upload?:boolean };
 type Row = Record<string,any>;
 const KINDS=['产品图','场景图','其他'], ANGLES=['正面','背面','侧面','俯视','仰视','其他'], BACKGROUNDS=['透明','其他'];
@@ -67,41 +67,9 @@ async function categorySnapshot(env:Env,name:string){
   return {sql,raw:snap,impact:{name:category.name,product_count:parsed[1].length,image_count:active,trashed_image_count:parsed[2].length-active,total_unlinked:parsed[2].length,preview_token:hash(snap)}};
 }
 
-async function migration(req:Request,env:Env,path:string){
-  if(!env.MIGRATION_KEY||!equal(req.headers.get('x-migration-key')||'',env.MIGRATION_KEY))fail(403,'迁移入口不可用。');
-  const db=query(env);if(await db.one("SELECT value FROM settings WHERE key='cloud_migration_complete'"))fail(410,'迁移已完成。');
-  if(path==='/api/migration/records'&&req.method==='POST'){
-    const b=await body(req),allowed:Record<string,string[]>={settings:['key','value'],categories:['name'],products:['id','code','name','brand','category','aliases','created_at'],images:['id','product_id','original_name','extension','mime_type','width','height','size','sha256','kind','angle','background','has_alpha','tags','created_at','deleted_at'],accounts:['id','username','salt','password_hash','role','created_at','disabled_at'],tokens:['id','name','hash','prefix','created_at','account_id','last_used_at'],audit:['id','action','actor','detail','created_at']};
-    const cols=allowed[b.table];if(!cols||!Array.isArray(b.rows)||b.rows.length>50)fail(400,'迁移数据格式无效。');
-    if(b.table==='settings'&&b.rows.some((r:Row)=>!['username','salt','password_hash'].includes(r.key)))fail(400,'设置项不允许迁移。');
-    if(b.rows.length)await env.DB.batch(b.rows.map((r:Row)=>db.stmt(`INSERT OR IGNORE INTO ${b.table} (${cols.join(',')}) VALUES (${marks(cols)})`,...cols.map(c=>r[c]??null))));
-    return json({ok:true,count:b.rows.length});
-  }
-  const m=path.match(/^\/api\/migration\/blob\/(original|thumbnail)\/([a-f0-9]{32})$/);
-  if(m&&req.method==='PUT'){
-    const row=await db.one('SELECT * FROM images WHERE id=?',m[2]);if(!row)fail(404,'迁移图片记录不存在。');
-    const data=new Uint8Array(await req.arrayBuffer());if(data.length>26*1024*1024)fail(413,'文件过大。');
-    const digest=hash(data);if(m[1]==='original'&&(digest!==row.sha256||data.length!==row.size))fail(400,'原图校验失败。');
-    const key=m[1]==='original'?`originals/${row.id}.${row.extension}`:`thumbnails/${row.id}.webp`;
-    await env.BUCKET.put(key,data,{httpMetadata:{contentType:m[1]==='original'?row.mime_type:'image/webp'},customMetadata:{sha256:digest}});
-    return json({ok:true,id:row.id,sha256:digest,size:data.length});
-  }
-  if(path==='/api/migration/verify'&&req.method==='GET'){
-    const rows=await db.all('SELECT id,extension,sha256,size FROM images');const missing=[];
-    for(const r of rows){const original=await env.BUCKET.head(`originals/${r.id}.${r.extension}`),thumb=await env.BUCKET.head(`thumbnails/${r.id}.webp`);if(!original||!thumb||original.size!==r.size||original.customMetadata?.sha256!==r.sha256)missing.push(r.id);}
-    const counts:Row={};for(const table of ['products','images','accounts','categories'])counts[table]=(await db.one(`SELECT count(*) n FROM ${table}`))!.n;
-    return json({counts,missing,verified:missing.length===0});
-  }
-  if(path==='/api/migration/complete'&&req.method==='POST'){
-    await db.run("INSERT INTO settings(key,value) VALUES('cloud_migration_complete',?)",String(now()));return json({ok:true});
-  }
-  fail(404,'迁移接口不存在。');
-}
-
 async function route(req:Request,env:Env){
   if(!env.DB||!env.BUCKET)fail(503,'云端存储尚未就绪。');
   const u=new URL(req.url),path=u.pathname.replace(/\/$/,''),method=req.method,q=u.searchParams,db=query(env);
-  if(path.startsWith('/api/migration/'))return migration(req,env,path);
   if(method!=='GET'&&method!=='HEAD'){
     const origin=req.headers.get('origin');if(origin&&origin!==u.origin)fail(403,'拒绝跨站请求。');
     if(req.headers.get('sec-fetch-site')==='cross-site')fail(403,'拒绝跨站请求。');

@@ -342,7 +342,7 @@ async function loadTeam() {
   const current=location.hostname;
   const chosen=network.public_origin||urls.find(url=>url.includes("//"+current+port))||urls[0]||location.origin;
   $("team-address").textContent=chosen;
-  $("team-address-note").textContent=network.public_origin?"员工可通过公司内网或连接公司 VPN 后访问此地址。":urls.length>1?`这台电脑还有这些内网地址：${urls.join("、")}`:urls.length?"员工需通过可访问服务器的公司内网或公司 VPN 使用此地址。":"没有检测到内网地址，请确认已连接公司网络。";
+  $("team-address-note").textContent="请先在 Sites 站点设置中授予同事访问权限，再为其创建素材库账号。";
   await loadAccounts();
 }
 async function loadAccounts(){
