@@ -92,7 +92,7 @@ $('auth-form').addEventListener('submit',async event=>{
   try {await api(setup?'/api/setup':'/api/login',{method:'POST',body:JSON.stringify({username:$('username').value.trim(),password:$('password').value})});$('password').value='';$('password-confirm').value='';await boot();}
   catch(error){$('auth-error').textContent=error.message;}finally{$('auth-submit').disabled=false;}
 });
-$('logout').onclick=guarded(async()=>{await api('/api/logout',{method:'POST'});state.selected.clear();$('selection-bar').classList.add('hidden');$('token-secret').value='';$('new-token').classList.add('hidden');await boot();});
+$('logout').onclick=guarded(async()=>{await api('/api/logout',{method:'POST'});invalidateProductOptions();state.selected.clear();$('selection-bar').classList.add('hidden');$('token-secret').value='';$('new-token').classList.add('hidden');await boot();});
 const viewInfo={library:['全部图片','YOUR PRODUCT ASSETS','每个产品，都有清晰的素材归属。'],unassigned:['待整理','A LITTLE ORGANIZATION','为这些图片关联产品，让下一次查找更准确。'],products:['产品目录','THE PRODUCT INDEX','用 SKU、名称与别名，建立统一的产品索引。'],integrations:['AI 取图','CONNECT YOUR WORKFLOW','让智能体通过受控接口，找到你需要的素材。'],activity:['操作记录','WORKSPACE ACTIVITY','上传、下载与资料修改，都有迹可循。'],team:['账号管理','TEAM ACCESS','内部成员可派发令牌，外部客户只能凭账号浏览下载。'],trash:['回收站','A SECOND CHANCE','移入回收站的图片仍保留原文件，可随时恢复。']};
 async function switchView(view) {
   const staffNow=state.status.role==='admin'||state.status.role==='staff';
@@ -111,7 +111,7 @@ async function switchView(view) {
 }
 // Delegate on the whole sidebar: some entries (账号管理) sit outside <nav>.
 document.querySelector('.sidebar').addEventListener('click',event=>{const button=event.target.closest('[data-view]');if(button)guarded(switchView)(button.dataset.view);});
-$('refresh').onclick=guarded(async()=>{await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products'){await loadProductCategories();await loadProducts();}else if(state.view==='activity')await loadAudit();else if(state.view==='team')await loadTeam();else await loadTokens();toast('已刷新');});
+$('refresh').onclick=guarded(async()=>{invalidateProductOptions();await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products'){await loadProductCategories();await loadProducts();}else if(state.view==='activity')await loadAudit();else if(state.view==='team')await loadTeam();else await loadTokens();toast('已刷新');});
 async function loadOverview() {
   const result=await api('/api/overview');
   for(const [key,label] of [['images','张'],['products','个'],['transparent','张']]) $('stat-'+key).innerHTML=result[key].toLocaleString()+'<small>'+label+'</small>';
@@ -304,17 +304,47 @@ $('product-delete-submit').onclick=guarded(async()=>{
   const controls=['product-delete-submit','product-delete-cancel','product-delete-close'];
   controls.forEach(id=>$(id).disabled=true);$('product-delete-submit').textContent='正在删除…';$('product-delete-error').textContent='';
   try {
-    await api('/api/products/'+impact.id,{method:'DELETE'});
+    await api('/api/products/'+impact.id,{method:'DELETE'});invalidateProductOptions();
     productDeleteUI.busy=false;productDelete.close();
     toast(`产品「${impact.code}」已删除，${impact.image_count} 张图片回到待整理`);
     await loadProductCategories();await loadProducts();await loadOverview();
   } catch(error){$('product-delete-error').textContent=error.message;}
   finally {productDeleteUI.busy=false;controls.forEach(id=>$(id).disabled=false);$('product-delete-submit').textContent='确认删除';}
 });
-$('product-form').onsubmit=guarded(async event=>{event.preventDefault();if($('create-category').disabled)return;if(!$('category-create').classList.contains('hidden')&&$('new-category-name').value.trim()){toast('请先创建分类，或取消新增。',true);return;}const button=event.submitter||$('product-form').querySelector('[type="submit"]');button.disabled=true;try{const body={};for(const key of ['code','name','category'])body[key]=$('product-'+key).value;body.aliases=splitTags($('product-aliases').value);const id=$('edit-product-id').value;await api('/api/products'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});$('product-dialog').close();toast(id?'产品资料已更新':'产品已创建');if(!id)state.productOffset=0;await loadOverview();if(state.view==='products')await loadProducts();else await loadImages();}finally{button.disabled=false;}});
+$('product-form').onsubmit=guarded(async event=>{event.preventDefault();if($('create-category').disabled)return;if(!$('category-create').classList.contains('hidden')&&$('new-category-name').value.trim()){toast('请先创建分类，或取消新增。',true);return;}const button=event.submitter||$('product-form').querySelector('[type="submit"]');button.disabled=true;try{const body={};for(const key of ['code','name','category'])body[key]=$('product-'+key).value;body.aliases=splitTags($('product-aliases').value);const id=$('edit-product-id').value;await api('/api/products'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});invalidateProductOptions();$('product-dialog').close();toast(id?'产品资料已更新':'产品已创建');if(!id)state.productOffset=0;await loadOverview();if(state.view==='products')await loadProducts();else await loadImages();}finally{button.disabled=false;}});
+// Product candidates: shared requests, bounded one-minute cache, explicit invalidation.
 const productSelectRequests={};
-async function fillProductSelect(prefix, selected='', q='') {const sequence=(productSelectRequests[prefix]||0)+1;productSelectRequests[prefix]=sequence;const result=await api('/api/products?q='+encodeURIComponent(q)+'&limit=200');if(sequence!==productSelectRequests[prefix])return;const select=$(prefix+'-product');const previous=Array.from(select.options).find(option=>option.value===selected);select.replaceChildren(new Option('暂不关联产品',''));result.items.forEach(item=>select.add(new Option(`${item.code} · ${item.name}`,item.id)));if(selected&&!result.items.some(item=>item.id===selected)&&previous)select.add(new Option(previous.text,selected));select.value=selected;}
+const productOptionsCache=new Map();
+let productOptionsGeneration=0;
+function invalidateProductOptions(){productOptionsGeneration++;productOptionsCache.clear();}
+function getProductOptions(q=''){
+  const key=q.trim(),cached=productOptionsCache.get(key);
+  if(cached&&(cached.pending||Date.now()-cached.time<60000))return cached.pending||Promise.resolve(cached.result);
+  const generation=productOptionsGeneration,entry={time:0};
+  entry.pending=api('/api/products?q='+encodeURIComponent(key)+'&limit=200').then(result=>{
+    if(generation===productOptionsGeneration&&productOptionsCache.get(key)===entry){entry.result=result;entry.time=Date.now();entry.pending=null;}
+    return result;
+  }).catch(error=>{if(productOptionsCache.get(key)===entry)productOptionsCache.delete(key);throw error;});
+  productOptionsCache.set(key,entry);
+  while(productOptionsCache.size>25)productOptionsCache.delete(productOptionsCache.keys().next().value);
+  return entry.pending;
+}
+function renderProductOptions(prefix,result,selected=''){
+  const select=$(prefix+'-product');
+  const previous=Array.from(select.options).find(option=>option.value===selected);
+  select.replaceChildren(new Option('暂不关联产品',''));
+  result.items.forEach(item=>select.add(new Option(`${item.code} · ${item.name}`,item.id)));
+  if(selected&&!result.items.some(item=>item.id===selected)&&previous)select.add(new Option(previous.text,selected));
+  select.value=selected;
+}
+async function fillProductSelect(prefix,selected='',q=''){
+  const sequence=(productSelectRequests[prefix]||0)+1;productSelectRequests[prefix]=sequence;
+  const result=await getProductOptions(q);
+  if(sequence!==productSelectRequests[prefix])return;
+  renderProductOptions(prefix,result,selected);
+}
 for(const prefix of ['upload','detail'])$(prefix+'-product-search').oninput=debounce(()=>guarded(fillProductSelect)(prefix,$(prefix+'-product').value,$(prefix+'-product-search').value));
+// End product candidates.
 async function openUpload(){state.uploadFiles=[];$('file-input').value='';$('upload-tags').value='';$('upload-product-search').value='';$('upload-kind').value='产品图';$('upload-angle').value='正面';$('upload-background').value='透明';await fillProductSelect('upload');renderUploadFiles();$('upload-dialog').showModal();}
 $('open-upload').onclick=guarded(openUpload);$('empty-upload').onclick=guarded(openUpload);
 function addFiles(files){if(state.uploading)return;for(const file of files){if(state.uploadFiles.length>=30){toast('每批最多 30 张图片。',true);break;}if(!/\.(jpe?g|png|webp)$/i.test(file.name)){toast(`${file.name}：仅支持 JPG、PNG、WebP。`,true);continue;}if(file.size>25*1024*1024){toast(`${file.name}：超过 25 MB。`,true);continue;}if(state.uploadFiles.some(item=>item.file.name===file.name&&item.file.size===file.size&&item.file.lastModified===file.lastModified))continue;state.uploadFiles.push({file,status:'等待上传',done:false,error:false});}renderUploadFiles();}
@@ -324,8 +354,68 @@ for(const type of ['dragenter','dragover'])$('dropzone').addEventListener(type,e
 $('upload-files').onclick=event=>{const remove=event.target.closest('[data-remove-file]');if(remove&&!state.uploading){state.uploadFiles.splice(Number(remove.dataset.removeFile),1);renderUploadFiles();}};
 function uploadRequest(form, item){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST','/api/images/upload');xhr.timeout=180000;xhr.upload.onprogress=event=>{if(event.lengthComputable){item.status=Math.round(event.loaded/event.total*100)+'% · 上传中';renderUploadFiles();}};xhr.onload=()=>{let result={};try{result=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300)resolve(result);else reject(new Error(typeof result.detail==='string'?result.detail:'上传失败，请检查文件或重新登录。'));};xhr.onerror=()=>reject(new Error('连接中断，请重试。'));xhr.ontimeout=()=>reject(new Error('上传超时，请重试。'));xhr.send(form);});}
 $('start-upload').onclick=guarded(async()=>{state.uploading=true;const inputs=['upload-product-search','upload-product','upload-kind','upload-angle','upload-background','upload-tags'];const values={};for(const key of ['product','kind','angle','background','tags'])values[key]=$('upload-'+key).value;inputs.forEach(id=>$(id).disabled=true);renderUploadFiles();try{for(const item of state.uploadFiles){if(item.done)continue;item.error=false;item.status='准备上传…';renderUploadFiles();const form=new FormData();form.append('file',item.file);for(const [key,value]of Object.entries(values))form.append(key==='product'?'product_id':key,value);try{await prepareCloudUpload(form,item.file);const result=await uploadRequest(form,item);item.done=true;item.status=result.duplicate?'已存在 · 已跳过':'上传成功';}catch(error){item.error=true;item.status=error.message;}renderUploadFiles();}await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products')await loadProducts();const failed=state.uploadFiles.filter(item=>!item.done).length;toast(failed?`${failed} 张未完成，可修改后重试。`:'本批图片已处理完成。',failed>0);}finally{state.uploading=false;inputs.forEach(id=>$(id).disabled=false);renderUploadFiles();}});
-async function openDetail(id){const readOnly=state.status.role!=='admin'&&state.status.role!=='staff';$('detail-form').querySelectorAll('input,select').forEach(control=>control.disabled=readOnly);$('detail-form').querySelector('[type="submit"]').classList.toggle('hidden',readOnly);$('detail-trash').classList.toggle('hidden',readOnly);const item=await api('/api/images/'+id);$('detail-id').value=item.id;$('detail-name').textContent=item.product_name||item.original_name;$('detail-image').src=item.thumbnail_url;$('detail-image').alt=item.product_name||item.original_name;$('detail-meta').innerHTML=`${escapeHtml(item.original_name)}<br>${item.width} × ${item.height} · ${item.extension.toUpperCase()} · ${bytes(item.size)}<br>上传于 ${date(item.created_at)} · 当前显示预览图`;$('detail-product-search').value='';if(item.product_id)$('detail-product').replaceChildren(new Option(`${item.product_code} · ${item.product_name}`,item.product_id));await fillProductSelect('detail',item.product_id||'');for(const key of ['kind','angle','background'])$('detail-'+key).value=item[key];$('detail-tags').value=item.tags.join('，');$('detail-dialog').showModal();}
-$('detail-form').onsubmit=guarded(async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const body={product_id:$('detail-product').value||null,tags:splitTags($('detail-tags').value)};for(const key of ['kind','angle','background'])body[key]=$('detail-'+key).value;await api('/api/images/'+$('detail-id').value,{method:'PUT',body:JSON.stringify(body)});$('detail-dialog').close();toast('图片资料已保存');await loadOverview();await loadImages();}finally{button.disabled=false;}});
+// Detail dialog opens immediately; stale responses can never replace another image.
+const detailState={request:0,id:'',ready:false,saving:false};
+function detailControls(){
+  const readOnly=!['admin','staff'].includes(state.status.role);
+  $('detail-form').querySelectorAll('input,select').forEach(control=>control.disabled=readOnly||!detailState.ready||detailState.saving);
+  const submit=$('detail-form').querySelector('[type="submit"]');
+  submit.classList.toggle('hidden',readOnly);submit.disabled=!detailState.ready||detailState.saving;
+  $('detail-trash').classList.toggle('hidden',state.status.role!=='admin');
+  $('detail-trash').disabled=!detailState.ready||detailState.saving;
+  $('detail-form').setAttribute('aria-busy',String(!detailState.ready||detailState.saving));
+}
+function paintDetail(item){
+  $('detail-id').value=item.id;$('detail-name').textContent=item.product_name||item.original_name;
+  $('detail-image').src=item.thumbnail_url;$('detail-image').alt=item.product_name||item.original_name;
+  $('detail-meta').innerHTML=`${escapeHtml(item.original_name)}<br>${item.width} × ${item.height} · ${item.extension.toUpperCase()} · ${bytes(item.size)}<br>上传于 ${date(item.created_at)} · 当前显示预览图`;
+  const select=$('detail-product');select.replaceChildren(new Option('暂不关联产品',''));
+  if(item.product_id)select.add(new Option(`${item.product_code} · ${item.product_name}`,item.product_id));
+  select.value=item.product_id||'';
+  for(const key of ['kind','angle','background'])$('detail-'+key).value=item[key];
+  $('detail-tags').value=item.tags.join('，');$('detail-download').disabled=false;
+}
+async function openDetail(id){
+  if(detailState.saving)return;
+  const sequence=++detailState.request;
+  detailState.id=id;detailState.ready=false;productSelectRequests.detail=(productSelectRequests.detail||0)+1;
+  $('detail-id').value=id;$('detail-name').textContent='正在加载图片…';
+  $('detail-image').removeAttribute('src');$('detail-image').alt='';$('detail-meta').textContent='';
+  $('detail-product').replaceChildren(new Option('暂不关联产品',''));
+  $('detail-product-search').value='';$('detail-tags').value='';
+  for(const key of ['kind','angle','background'])$('detail-'+key).value='';
+  $('detail-download').disabled=true;$('detail-retry').classList.add('hidden');
+  $('detail-load-status').textContent='正在核对最新图片资料和加载产品…';$('detail-load-status').classList.remove('hidden','error');
+  const cached=state.images.find(item=>item.id===id);if(cached)paintDetail(cached);
+  detailControls();if(!$('detail-dialog').open)$('detail-dialog').showModal();
+  const readOnly=!['admin','staff'].includes(state.status.role);
+  const results=await Promise.allSettled([api('/api/images/'+id),readOnly?Promise.resolve(null):getProductOptions()]);
+  if(sequence!==detailState.request||!$('detail-dialog').open)return;
+  const [image,products]=results;
+  if(image.status==='fulfilled')paintDetail(image.value);
+  if(image.status==='fulfilled'&&products.status==='fulfilled'){
+    if(products.value)renderProductOptions('detail',products.value,image.value.product_id||'');
+    detailState.ready=true;$('detail-load-status').classList.add('hidden');
+  }else{
+    const message=image.status==='rejected'?image.reason.message:products.reason.message;
+    $('detail-load-status').textContent='加载失败：'+message+'。请重试后再保存。';
+    $('detail-load-status').classList.add('error');$('detail-retry').classList.remove('hidden');
+  }
+  detailControls();
+}
+$('detail-retry').onclick=guarded(()=>openDetail(detailState.id));
+$('detail-dialog').addEventListener('close',()=>{detailState.request++;detailState.ready=false;productSelectRequests.detail=(productSelectRequests.detail||0)+1;});
+$('detail-form').onsubmit=guarded(async event=>{
+  event.preventDefault();if(!detailState.ready||detailState.saving)return;
+  const body={product_id:$('detail-product').value||null,tags:splitTags($('detail-tags').value)};
+  for(const key of ['kind','angle','background'])body[key]=$('detail-'+key).value;
+  detailState.saving=true;detailControls();
+  try{
+    await api('/api/images/'+$('detail-id').value,{method:'PUT',body:JSON.stringify(body)});
+    $('detail-dialog').close();toast('图片资料已保存');await loadOverview();await loadImages();
+  }finally{detailState.saving=false;detailControls();}
+});
+// End detail loading.
 $('detail-download').onclick=guarded(()=>downloadImage($('detail-id').value));
 async function permanentlyDelete(ids) {
   const result=await api('/api/images/delete',{method:'POST',body:JSON.stringify({image_ids:ids})});

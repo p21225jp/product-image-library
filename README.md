@@ -31,6 +31,10 @@ mcp_bridge.py 保留原 stdio MCP 工具，新增可选 ASSET_SITES_TOKEN。私�
 
 运行 node scripts/test-library.mjs、node node_modules/typescript/bin/tsc --noEmit，使用 npm run dev 预览，npm run build 构建。本地数据库与云端隔离。
 
+图片详情窗口点击后立即打开，先展示当前列表已有资料，再并行核对图片详情与加载产品候选；核对完成前不能保存，失败可重试。关闭或切换图片会忽略旧请求。产品候选在当前页面内缓存 60 秒、最多 25 个搜索条件，共享相同的进行中请求；产品新建、修改、删除、手动刷新和退出登录时清除缓存。窗口不会等待原图下载。
+
+`node scripts/test-detail-loading.mjs` 覆盖立即弹窗、并行加载、缓存复用与失效、晚到请求隔离、失败重试以及只读权限。
+
 测试覆盖鉴权、撤销、角色隔离、SKU 前导零、别名、分类变更、关联冲突、回收站、原图字节一致性、流式 ZIP 和迁移关闭。
 
 ## 数据迁移
