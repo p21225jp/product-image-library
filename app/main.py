@@ -698,6 +698,41 @@ def preview_category_deletion(name: str = Query(min_length=1, max_length=80), ac
         return category_deletion_snapshot(con, name)
 
 
+class RenameCategoryInput(CategoryInput):
+    new_name: str = Field(min_length=1, max_length=80)
+
+
+@app.put('/api/categories')
+def rename_category(body: RenameCategoryInput, actor: str = Depends(admin)):
+    """Rename a category in place. Products and images keep their rows; only the label changes."""
+    with db() as con:
+        con.execute('BEGIN IMMEDIATE')
+        current = con.execute('SELECT name FROM categories WHERE name=? COLLATE NOCASE', (body.name,)).fetchone()
+        if not current:
+            current = con.execute('SELECT name FROM categories WHERE name=? COLLATE NOCASE',
+                                  (normalized(body.name),)).fetchone()
+        if not current:
+            fail(404, '分类不存在或已被删除，请刷新分类列表。')
+        old_name = current['name']
+        new_name = normalized(body.new_name)
+        if not new_name or len(new_name) > 80:
+            fail(400, '分类名称需为 1 至 80 个字符。')
+        # A case-only change targets the same row, so it must be allowed; anything else colliding is a real clash.
+        clash = con.execute('SELECT name FROM categories WHERE name=? AND name<>? COLLATE BINARY',
+                           (new_name, old_name)).fetchone()
+        if clash:
+            fail(409, f'已有「{clash["name"]}」分类，请换一个名称。')
+        affected = con.execute('SELECT count(*) FROM products WHERE category=? COLLATE NOCASE', (old_name,)).fetchone()[0]
+        if new_name != old_name:
+            # Products store the category by name, so update them in the same transaction.
+            con.execute('UPDATE products SET category=? WHERE category=? COLLATE NOCASE', (new_name, old_name))
+            con.execute('UPDATE categories SET name=? WHERE name=?', (new_name, old_name))
+        renamed = new_name != old_name
+    if renamed:
+        audit('修改分类名称', actor, f'{old_name} → {new_name}；{affected} 个产品同步更新。')
+    return {'name': new_name, 'previous': old_name, 'renamed': renamed, 'product_count': affected}
+
+
 class DeleteCategoryInput(CategoryInput):
     preview_token: str = Field(pattern=r'^[a-f0-9]{64}$')
 

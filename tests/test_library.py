@@ -357,6 +357,55 @@ def test_upload_defaults_match_transparent_workflow(logged):
     assert upload(logged, alpha=False).status_code == 400
 
 
+def test_category_rename_updates_products_and_is_admin_only(logged):
+    entry = product(logged, category='显示器')
+    before = upload(logged, entry['id']).json()['image']
+
+    renamed = logged.put('/api/categories', json={'name': '显示器', 'new_name': '显示器 / 电竞屏'})
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()['renamed'] is True
+    assert renamed.json()['product_count'] == 1
+    assert logged.get('/api/categories').json()['items'] == ['显示器 / 电竞屏']
+    # The product now carries the new label and keeps its images.
+    current = logged.get('/api/products').json()['items'][0]
+    assert current['category'] == '显示器 / 电竞屏'
+    assert current['image_count'] == 1
+    assert logged.get('/api/images/' + before['id']).json()['product_id'] == entry['id']
+
+    # Renaming to the same value is a no-op, not an error.
+    same = logged.put('/api/categories', json={'name': '显示器 / 电竞屏', 'new_name': '显示器 / 电竞屏'})
+    assert same.status_code == 200 and same.json()['renamed'] is False
+
+    # A case-only change edits the same row, so it is allowed.
+    assert logged.post('/api/categories', json={'name': 'Others'}).status_code == 200
+    case_only = logged.put('/api/categories', json={'name': 'Others', 'new_name': 'others'})
+    assert case_only.status_code == 200, case_only.text
+    assert case_only.json()['renamed'] is True
+    # Renaming onto a different existing category must be refused, not silently merged.
+    logged.post('/api/categories', json={'name': '配件'})
+    clash = logged.put('/api/categories', json={'name': 'others', 'new_name': '配件'})
+    assert clash.status_code == 409, clash.text
+    assert set(logged.get('/api/categories').json()['items']) == {'显示器 / 电竞屏', 'others', '配件'}
+    assert logged.put('/api/categories', json={'name': '缺少的分类', 'new_name': '新名称'}).status_code == 404
+    blank = logged.put('/api/categories', json={'name': 'others', 'new_name': '   '})
+    assert blank.status_code in (400, 422)
+    assert 'others' in logged.get('/api/categories').json()['items']
+
+    # Internal and external accounts cannot rename.
+    main.login_attempts.clear()
+    logged.post('/api/accounts', json={'username': 'inner-ren', 'password': 'inner-password-1', 'role': 'staff'})
+    logged.post('/api/accounts', json={'username': 'outer-ren', 'password': 'outer-password-1', 'role': 'external'})
+    with TestClient(main.app, base_url='http://localhost', client=('192.168.1.81', 7400)) as member, \
+         TestClient(main.app, base_url='http://localhost', client=('192.168.1.82', 7401)) as outer:
+        member.post('/api/login', json={'username': 'inner-ren', 'password': 'inner-password-1'})
+        outer.post('/api/login', json={'username': 'outer-ren', 'password': 'outer-password-1'})
+        body = {'name': 'Others', 'new_name': '内部改名'}
+        assert member.put('/api/categories', json=body).status_code == 403
+        assert outer.put('/api/categories', json=body).status_code == 403
+    # The refused renames left the categories untouched.
+    assert set(logged.get('/api/categories').json()['items']) == {'显示器 / 电竞屏', 'others', '配件'}
+
+
 def test_product_deletion_unbinds_images_and_is_admin_only(logged):
     entry = product(logged)
     keep = upload(logged, entry['id']).json()['image']

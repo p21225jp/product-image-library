@@ -7,6 +7,7 @@
 - 首次在服务器本机创建管理员；密码使用 scrypt 哈希，8 小时登录会话。
 - 产品 SKU 按文本保存，保留前导零；支持名称、单选分类、别名；分类选项可在新建或编辑产品时创建，并自动选中。
 - 产品删除（仅管理员）：确认弹窗显示受影响的图片数量；删除产品记录后，其图片全部保留并回到「待整理」，原图文件不受影响。
+- 管理分类（仅管理员）：在「管理分类」页面顶部直接输入名称新建分类，列表中可「重命名」或「删除」。改名后该分类下的产品在同一条事务里同步更新为新名称，图片关联不变，无需重新关联。只改大小写允许；改成另一个已存在的分类名会返回 409，不会合并两个分类。
 - JPG / PNG / WebP 多文件顺序上传；每张 25 MB、4000 万像素以内，每批前台最多 30 张。
 - 原文件原样保留；另生成 WebP 缩略图。自动识别真实透明像素。
 - 同一产品内按 SHA-256 提示重复；允许同一张素材关联不同产品。
@@ -174,6 +175,9 @@ GET  /api/images?product_code=001234&background=透明&angle=正面&min_width=20
 GET  /api/images/{image_id}
 GET  /api/images/{image_id}/file
 GET  /api/images/{image_id}/file?variant=thumbnail
+GET  /api/categories                 分类名称列表
+POST /api/categories                {"name":"分类名"} 新建分类（内部账号及以上）
+PUT  /api/categories                {"name":"旧名","new_name":"新名"} 修改分类名称（管理员）
 GET  /api/accounts                   账号列表（管理员）
 POST /api/accounts                  {"username":"...","password":"...","role":"staff|external"} 创建账号（管理员）
 PUT  /api/accounts/{id}             {"password":"..."} 重置密码并强制该账号重新登录（管理员）
