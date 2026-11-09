@@ -20,10 +20,15 @@ mcp_bridge.py 保留原 stdio MCP 工具，新增可选 ASSET_SITES_TOKEN。私�
 
 - ASSET_SERVER_URL：站点的 HTTPS 地址。
 - ASSET_API_TOKEN：网页 AI 取图页面创建的图库令牌。
+- ASSET_WRITE_API_TOKEN：管理员签发、scope 为 `products:create` 的独立写入令牌；只取图时可不配置。
 - ASSET_SITES_TOKEN：Sites 站点服务访问令牌。
 - ASSET_EXPORT_DIR：智能体所在电脑的素材输出目录。
 
 服务访问令牌置于 OAI-Sites-Authorization 请求头，图库令牌置于 Authorization 请求头。不要将凭据写入源码或 URL。取图工具把原图下载到本机，只向模型返回文字，不必将站点改为公开。
+
+MCP `create_product(sku, name, category='', aliases=[])` 新建产品，SKU 为字符串并保留前导零。分类为已有的单个分类；空值表示未分类。SKU 冲突返回 409，不覆盖资料。写入工具只使用 ASSET_WRITE_API_TOKEN，不回退到取图令牌。此授权不允许修改或删除产品、创建分类、修改图片及管理账号。所有创建记录关联令牌 ID，可在操作记录追踪；撤销令牌立即失效。结构迁移为旧令牌保留 `read` 权限，不自动提升权限。
+
+管理员可在 AI 取图页选择“查询、下载和新建产品”签发令牌，也可运行 `tools/authorize_mcp_admin.py`：脚本从本机 Codex 配置读取站点地址和平台认证，在本机窗口输入管理员账号密码，签发专用令牌并写入该 MCP 的私有配置，随后退出临时管理员会话。管理员密码不保存；凭据不作为命令行参数、日志或返回给模型。该脚本不会创建任何产品。
 
 ## 开发与验证
 
