@@ -15,6 +15,13 @@
       "when": 1794218573043,
       "tag": "0001_product_create_token_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794384798073,
+      "tag": "0002_safe_rictor",
+      "breakpoints": true
     }
   ]
 }

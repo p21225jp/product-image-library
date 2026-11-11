@@ -18,7 +18,7 @@ export const accounts = sqliteTable('accounts', {
   role:text().notNull(), created_at:integer().notNull(), disabled_at:integer()
 },t=>[check('account_role',sql`${t.role} in ('staff','external')`),uniqueIndex('account_name_nocase').on(sql`lower(${t.username})`)]);
 export const sessions = sqliteTable('sessions', { hash:text().primaryKey(), expires:integer().notNull(), role:text().notNull().default('admin'), account_id:text() });
-export const tokens = sqliteTable('tokens', { id:text().primaryKey(), name:text().notNull(), hash:text().notNull().unique(), prefix:text().notNull(), created_at:integer().notNull(), account_id:text(), last_used_at:integer(), scope:text().notNull().default('read') },t=>[check('token_scope',sql`${t.scope} in ('read','products:create')`)]);
+export const tokens = sqliteTable('tokens', { id:text().primaryKey(), name:text().notNull(), hash:text().notNull().unique(), prefix:text().notNull(), created_at:integer().notNull(), account_id:text(), last_used_at:integer(), scope:text().notNull().default('read') },t=>[check('token_scope',sql`${t.scope} in ('read','products:create','images:associate')`)]);
 export const audit = sqliteTable('audit', { id:integer().primaryKey({autoIncrement:true}), action:text().notNull(), actor:text().notNull(), detail:text().notNull(), created_at:integer().notNull() });
 export const pendingDeletes = sqliteTable('pending_deletes',{ id:text().primaryKey(), extension:text().notNull(), created_at:integer().notNull() });
 export const loginAttempts = sqliteTable('login_attempts',{ key:text().primaryKey(), attempts:integer().notNull(), started_at:integer().notNull() });
