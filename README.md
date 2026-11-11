@@ -143,12 +143,15 @@ $env:ASSET_DATA_DIR = 'D:\CompanyAssetLibrary'
 | 工具 | 功能 |
 | --- | --- |
 | `search_products(query, limit, offset)` | 查询 SKU、名称或别名，返回产品文字信息 |
+| `create_product(sku, name, category, aliases)` | 云端管理员授权后新建产品；保留 SKU 前导零，重复 SKU 报错 |
 | `search_images(product_code, query, kind, angle, background, min_width, limit, offset)` | 查询图片，返回图片 ID 和文字属性 |
 | `get_image_info(image_id)` | 核对格式、尺寸、产品归属 |
 | `export_images(image_ids)` | 一次下载最多 30 张原图到预设目录，不覆盖已有文件 |
 | `export_images_zip(image_ids)` | 服务端打包后，只下载一个 ZIP；每次最多 100 张、原图合计 500 MiB，不在本机解压 |
 
 本机 MCP 新增 `export_images_zip` 后，批量打包优先使用它：一次请求 `/api/export`，以流式方式保存压缩包，检查图片数量与 ZIP 完整性，成功后只保留 ZIP。单张原图继续使用 `export_images`。大包下载建议在客户端将该连接的 `tool_timeout_sec` 设为 `600`；这不会改变单次原图合计 500 MiB 的服务端限制。已运行的客户端需重新加载 MCP 连接才能发现新增工具。此处代码更新不会自动更新云端站点提供的取图脚本下载文件。
+
+云端版的 `create_product` 使用独立的 `ASSET_WRITE_API_TOKEN`，必须由素材库管理员签发 `products:create` 权限；旧取图令牌不自动升级。私有 Sites 还需配置 `ASSET_SITES_TOKEN`。分类只能使用已有选项，写入授权不授予修改、删除或账号管理权限。`scripts/authorize_mcp_admin.py` 可在本机输入管理员账号完成签发与 Codex 配置，不保存管理员密码。此授权方式适用于已部署相应接口的云端版，不会重新启用旧版本机 AI 批量创建功能。
 
 示例指令：
 
