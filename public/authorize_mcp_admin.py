@@ -16,11 +16,12 @@ import tomli
 MCP_NAME = 'mkt_asset_library'
 ENV_HEADER = '[mcp_servers.mkt_asset_library.env]'
 WRITABLE_KEYS = {'ASSET_WRITE_API_TOKEN', 'ASSET_ASSOCIATE_API_TOKEN', 'ASSET_SITES_TOKEN'}
+COMBINED_SCOPE = 'products:create+images:associate'
 
 
-def update_mcp_env(path: Path, changes: dict[str, str], expected_origin: str) -> None:
+def update_mcp_env(path: Path, changes: dict[str, str], expected_origin: str, remove_keys: tuple[str, ...] = ()) -> None:
     """Update only this MCP's credentials, preserving all other Codex configuration."""
-    if not changes or set(changes) - WRITABLE_KEYS:
+    if not changes or (set(changes) | set(remove_keys)) - WRITABLE_KEYS or set(changes) & set(remove_keys):
         raise ValueError('Unsupported credential configuration key')
     source = path.read_text(encoding='utf-8-sig')
     config = tomli.loads(source)
@@ -34,6 +35,8 @@ def update_mcp_env(path: Path, changes: dict[str, str], expected_origin: str) ->
     begin = starts[0] + 1
     end = next((i for i in range(begin, len(lines)) if lines[i].lstrip().startswith('[')), len(lines))
     block = lines[begin:end]
+    for key in remove_keys:
+        block = [line for line in block if not re.match(r'^\s*' + re.escape(key) + r'\s*=', line)]
     for key, value in changes.items():
         if not isinstance(value, str) or not value:
             raise ValueError('Empty credential was not saved')
@@ -49,6 +52,8 @@ def update_mcp_env(path: Path, changes: dict[str, str], expected_origin: str) ->
     parsed = tomli.loads(updated)
     expected = tomli.loads(source)
     expected['mcp_servers'][MCP_NAME]['env'].update(changes)
+    for key in remove_keys:
+        expected['mcp_servers'][MCP_NAME]['env'].pop(key, None)
     if parsed != expected:
         raise ValueError('Configuration validation failed; original file was retained')
     temporary = None
@@ -64,13 +69,15 @@ def update_mcp_env(path: Path, changes: dict[str, str], expected_origin: str) ->
             temporary.unlink(missing_ok=True)
 
 
-def authorize(config_path: Path, scope: str = 'products:create') -> dict:
-    if scope not in ('products:create', 'images:associate'):
+def authorize(config_path: Path, scope: str = COMBINED_SCOPE) -> dict:
+    if scope not in ('products:create', 'images:associate', COMBINED_SCOPE):
         raise ValueError('Unsupported grant scope')
     association = scope == 'images:associate'
+    combined = scope == COMBINED_SCOPE
     env_key = 'ASSET_ASSOCIATE_API_TOKEN' if association else 'ASSET_WRITE_API_TOKEN'
-    capability = 'can_associate_images' if association else 'can_create_products'
-    grant_label = '图片关联' if association else '新建产品'
+    capabilities = ['can_create_products', 'can_associate_images'] if combined else ['can_associate_images' if association else 'can_create_products']
+    remove_keys = ('ASSET_ASSOCIATE_API_TOKEN',) if combined else ()
+    grant_label = '新建产品和关联图片' if combined else '图片关联' if association else '新建产品'
     entry = tomli.loads(config_path.read_text(encoding='utf-8-sig'))['mcp_servers'][MCP_NAME]
     environment = entry.get('env', {})
     origin = environment['ASSET_SERVER_URL'].rstrip('/')
@@ -84,9 +91,11 @@ def authorize(config_path: Path, scope: str = 'products:create') -> dict:
         existing = environment.get(env_key)
         if existing:
             check = client.get('/api/status', headers={'Authorization': 'Bearer ' + existing})
-            if check.status_code == 200 and check.json().get(capability):
+            if check.status_code == 200 and all(check.json().get(key) for key in capabilities):
+                if combined:
+                    update_mcp_env(config_path, {env_key: existing}, origin, remove_keys=remove_keys)
                 print('现有' + grant_label + '授权有效，无需重复签发。')
-                return {'ok': True, 'reused_existing_grant': True}
+                return {'ok': True, 'scope': scope, 'reused_existing_grant': True}
         print('素材库地址：' + origin)
         print('请在本窗口输入素材库管理员账号。密码不会显示，也不会保存。')
         username = input('管理员账号：').strip()
@@ -109,15 +118,15 @@ def authorize(config_path: Path, scope: str = 'products:create') -> dict:
             saved = False
             try:
                 check = client.get('/api/status', headers={'Authorization': 'Bearer ' + grant['token']})
-                if check.status_code != 200 or not check.json().get(capability):
+                if check.status_code != 200 or not all(check.json().get(key) for key in capabilities):
                     raise ValueError('新令牌没有所需权限，未保存到配置。')
-                update_mcp_env(config_path, {env_key: grant['token']}, origin)
+                update_mcp_env(config_path, {env_key: grant['token']}, origin, remove_keys=remove_keys)
                 saved = True
             finally:
                 if not saved:
                     client.delete('/api/tokens/' + grant['id'])
             print('管理员授权完成，已保存专用的' + grant_label + '令牌。管理员密码未保存。')
-            print('请重载 MCP 客户端，以使用 ' + ('associate_images' if association else 'create_product') + ' 工具。')
+            print('请重载 MCP 客户端，以使用 ' + ('create_product 和 associate_images' if combined else 'associate_images' if association else 'create_product') + ' 工具。')
             return {'ok': True, 'scope': scope, 'grant_id': grant['id'], 'config_path': str(config_path)}
         finally:
             client.post('/api/logout', json={})
@@ -127,7 +136,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, default=Path.home() / '.codex' / 'config.toml')
     parser.add_argument('--report', type=Path)
-    parser.add_argument('--scope', choices=['products:create', 'images:associate'], default='products:create')
+    parser.add_argument('--scope', choices=[COMBINED_SCOPE, 'products:create', 'images:associate'], default=COMBINED_SCOPE)
     parser.add_argument('--no-pause', action='store_true')
     args = parser.parse_args()
     try:

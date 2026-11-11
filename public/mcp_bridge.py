@@ -39,11 +39,11 @@ server = MCPServer('product-image-library', log_level='WARNING')
 
 
 def client(write: bool = False, associate: bool = False):
-    token = ASSOCIATE_API_TOKEN if associate else WRITE_API_TOKEN if write else API_TOKEN
+    token = (ASSOCIATE_API_TOKEN or WRITE_API_TOKEN) if associate else WRITE_API_TOKEN if write else API_TOKEN
     if associate and not token:
-        raise LibraryToolError('关联图片需要管理员签发的 images:associate 令牌，请配置 ASSET_ASSOCIATE_API_TOKEN。')
+        raise LibraryToolError('请配置管理员联合写入令牌 ASSET_WRITE_API_TOKEN；旧版独立关联令牌可继续使用 ASSET_ASSOCIATE_API_TOKEN。')
     if write and not token:
-        raise LibraryToolError('新建产品需要管理员签发的 products:create 令牌，请配置 ASSET_WRITE_API_TOKEN。')
+        raise LibraryToolError('新建产品需要管理员写入授权，请配置 ASSET_WRITE_API_TOKEN。')
     if not token:
         raise LibraryToolError('请先在素材库「AI 取图」中创建只读令牌，并配置 ASSET_API_TOKEN。')
     headers = {'Authorization': 'Bearer ' + token}
