@@ -26,11 +26,11 @@ const icons = {
 const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.image}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(el => {el.innerHTML = icon(el.dataset.icon);});
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {view:'library', status:null, images:[], products:[], selected:new Set(), offset:0, total:0, uploadFiles:[], uploading:false, request:0, productRequest:0, productCode:'', productCategory:'', productOffset:0, productPageSize:20, productTotal:0, productLoading:false, productError:false};
+const state = {view:'library', status:null, images:[], products:[], selected:new Set(), offset:0, total:0, uploadFiles:[], uploading:false, request:0, productRequest:0, navigationRequest:0, productCode:'', productCategory:'', productOffset:0, productPageSize:20, productTotal:0, productLoading:false, productError:false};
 const bytes = number => number >= 1024 ** 3 ? `${(number / 1024 ** 3).toFixed(2)} GB` : number >= 1024 ** 2 ? `${(number / 1024 ** 2).toFixed(1)} MB` : `${(number / 1024).toFixed(1)} KB`;
 const date = stamp => new Date(stamp * 1000).toLocaleString('zh-CN', {hour12:false});
 const splitTags = value => value.split(/[,，]/).map(item => item.trim()).filter(Boolean);
-const debounce = (fn, delay=250) => {let timeout; return (...args) => {clearTimeout(timeout); timeout=setTimeout(() => fn(...args), delay);};};
+const debounce = (fn, delay=250) => {let timeout; const run=(...args) => {clearTimeout(timeout); timeout=setTimeout(() => fn(...args), delay);};run.cancel=()=>clearTimeout(timeout);return run;};
 function toast(message, error=false) {const el=document.createElement('div');el.className='toast'+(error?' error':'');el.textContent=message;$('toast-container').append(el);setTimeout(()=>el.remove(),5000);}
 async function api(path, options={}) {
   const headers = {...options.headers};
@@ -95,10 +95,25 @@ $('auth-form').addEventListener('submit',async event=>{
 });
 $('logout').onclick=guarded(async()=>{await api('/api/logout',{method:'POST'});invalidateProductOptions();state.selected.clear();$('selection-bar').classList.add('hidden');$('token-secret').value='';$('new-token').classList.add('hidden');await boot();});
 const viewInfo={library:['全部图片','YOUR PRODUCT ASSETS','每个产品，都有清晰的素材归属。'],unassigned:['待整理','A LITTLE ORGANIZATION','为这些图片关联产品，让下一次查找更准确。'],products:['产品目录','THE PRODUCT INDEX','用 SKU、名称与别名，建立统一的产品索引。'],integrations:['AI 取图','CONNECT YOUR WORKFLOW','让智能体通过受控接口，找到你需要的素材。'],activity:['操作记录','WORKSPACE ACTIVITY','上传、下载与资料修改，都有迹可循。'],team:['账号管理','TEAM ACCESS','内部成员可派发令牌，外部客户只能凭账号浏览下载。'],trash:['回收站','A SECOND CHANCE','移入回收站的图片仍保留原文件，可随时恢复。']};
-async function switchView(view) {
+function clearPageSearch() {
+  delayedImageSearch.cancel();delayedProductSearch.cancel();
+  // Responses from the previous page must not restore its search results.
+  state.request++;state.productRequest++;
+  state.productCode='';state.productCategory='';state.offset=0;state.productOffset=0;
+  state.images=[];state.products=[];state.total=0;state.productTotal=0;state.productLoading=false;state.productError=false;
+  $('search').value='';$('product-search').value='';$('product-filter-category').value='';
+  for(const key of ['kind','angle','background','category'])$('filter-'+key).value='';
+  for(const id of ['clear-search','reset-filters','reset-product-filter','empty','pagination'])$(id).classList.add('hidden');
+  $('image-grid').innerHTML='';$('product-table').innerHTML='';$('result-count').textContent='正在加载…';
+  renderProductPagination();
+}
+async function switchView(view, {productCode=''}={}) {
   const staffNow=state.status.role==='admin'||state.status.role==='staff';
   if(!staffNow&&['integrations','activity','team','trash'].includes(view))view='library';
   if(state.view==='integrations'&&view!=='integrations') {$('token-secret').value='';$('new-token').classList.add('hidden');}
+  const navigation=++state.navigationRequest;
+  clearPageSearch();
+  if(view==='library'&&productCode){state.productCode=productCode;$('search').value=productCode;}
   state.view=view;state.offset=0;state.selected.clear();renderSelection();
   const [title,eyebrow,description]=viewInfo[view];$('breadcrumb-current').textContent=title;$('page-title').innerHTML=escapeHtml(title)+'<span class="title-dot">.</span>';$('page-eyebrow').textContent=eyebrow;$('page-description').textContent=description;
   document.querySelectorAll('.nav-item').forEach(button=>button.classList.toggle('active',button.dataset.view===view));
@@ -108,7 +123,8 @@ async function switchView(view) {
   const canUpload=state.status.role==='admin'||state.status.role==='staff';
   $('open-upload').classList.toggle('hidden',!canUpload||['integrations','activity','trash'].includes(view));$('new-product').classList.toggle('hidden',!canUpload||['integrations','activity','trash'].includes(view));$('select-page').classList.remove('hidden');
   await loadOverview();
-  renderSelection();if(isLibrary) await loadImages(); else if(view==='products'){await loadProductCategories();await loadProducts();} else if(view==='integrations') await loadTokens(); else if(view==='team') await loadTeam(); else await loadAudit();
+  if(navigation!==state.navigationRequest)return;
+  renderSelection();if(isLibrary) await loadImages(); else if(view==='products'){await loadProductCategories();if(navigation!==state.navigationRequest)return;await loadProducts();} else if(view==='integrations') await loadTokens(); else if(view==='team') await loadTeam(); else await loadAudit();
 }
 // Delegate on the whole sidebar: some entries (账号管理) sit outside <nav>.
 document.querySelector('.sidebar').addEventListener('click',event=>{const button=event.target.closest('[data-view]');if(button)guarded(switchView)(button.dataset.view);});
@@ -152,7 +168,8 @@ function renderViewerNotice(){
   $('empty-description').textContent='如需恢复图片，请联系素材库管理员。';
 }
 function resetFilters(){state.productCode='';$('search').value='';for(const key of ['kind','angle','background','category'])$('filter-'+key).value='';state.offset=0;guarded(loadImages)();}
-$('search').oninput=debounce(()=>{state.productCode='';state.offset=0;guarded(loadImages)();});
+const delayedImageSearch=debounce(()=>{state.productCode='';state.offset=0;guarded(loadImages)();});
+$('search').oninput=delayedImageSearch;
 for(const key of ['kind','angle','background','category']) $('filter-'+key).onchange=()=>{state.offset=0;guarded(loadImages)();};
 $('reset-filters').onclick=resetFilters;$('clear-search').onclick=()=>{state.productCode='';$('search').value='';state.offset=0;guarded(loadImages)();};
 $('prev-page').onclick=()=>{state.offset=Math.max(0,state.offset-48);guarded(loadImages)();};$('next-page').onclick=()=>{state.offset+=48;guarded(loadImages)();};
@@ -271,7 +288,7 @@ async function createCategory() {
 $('create-category').onclick=createCategory;
 $('new-category-name').onkeydown=event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();createCategory();}};
 $('new-product').onclick=guarded(()=>openProduct());
-$('product-table').onclick=guarded(async event=>{if(state.productLoading)return;if(event.target.closest('[data-retry-products]')){await loadProducts();return;}const associate=event.target.closest('[data-associate-product]');if(associate){await openAssociation(state.products.find(item=>item.id===associate.dataset.associateProduct));return;}const remove=event.target.closest('[data-delete-product]');if(remove){await openProductDelete(remove.dataset.deleteProduct);return;}const edit=event.target.closest('[data-edit-product]');const view=event.target.closest('[data-product-images]');if(edit)await openProduct(state.products.find(item=>item.id===edit.dataset.editProduct));if(view){state.productCode=view.dataset.productImages;$('search').value=view.dataset.productImages;for(const key of ['kind','angle','background','category'])$('filter-'+key).value='';await switchView('library');}});
+$('product-table').onclick=guarded(async event=>{if(state.productLoading)return;if(event.target.closest('[data-retry-products]')){await loadProducts();return;}const associate=event.target.closest('[data-associate-product]');if(associate){await openAssociation(state.products.find(item=>item.id===associate.dataset.associateProduct));return;}const remove=event.target.closest('[data-delete-product]');if(remove){await openProductDelete(remove.dataset.deleteProduct);return;}const edit=event.target.closest('[data-edit-product]');const view=event.target.closest('[data-product-images]');if(edit)await openProduct(state.products.find(item=>item.id===edit.dataset.editProduct));if(view)await switchView('library',{productCode:view.dataset.productImages});});
 const productDeleteUI={preview:null,busy:false};
 const productDelete=document.createElement('dialog');
 productDelete.id='product-delete';productDelete.className='category-delete';
