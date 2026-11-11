@@ -26,7 +26,7 @@ const icons = {
 const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.image}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(el => {el.innerHTML = icon(el.dataset.icon);});
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {view:'library', status:null, images:[], products:[], selected:new Set(), offset:0, total:0, uploadFiles:[], uploading:false, request:0, productRequest:0, navigationRequest:0, productCode:'', productCategory:'', productOffset:0, productPageSize:20, productTotal:0, productLoading:false, productError:false};
+const state = {view:'library', status:null, images:[], products:[], selected:new Set(), offset:0, total:0, uploadFiles:[], uploading:false, uploadFinished:false, request:0, productRequest:0, navigationRequest:0, productCode:'', productCategory:'', productOffset:0, productPageSize:20, productTotal:0, productLoading:false, productError:false};
 const bytes = number => number >= 1024 ** 3 ? `${(number / 1024 ** 3).toFixed(2)} GB` : number >= 1024 ** 2 ? `${(number / 1024 ** 2).toFixed(1)} MB` : `${(number / 1024).toFixed(1)} KB`;
 const date = stamp => new Date(stamp * 1000).toLocaleString('zh-CN', {hour12:false});
 const splitTags = value => value.split(/[,，]/).map(item => item.trim()).filter(Boolean);
@@ -363,15 +363,65 @@ async function fillProductSelect(prefix,selected='',q=''){
 }
 for(const prefix of ['upload','detail'])$(prefix+'-product-search').oninput=debounce(()=>guarded(fillProductSelect)(prefix,$(prefix+'-product').value,$(prefix+'-product-search').value));
 // End product candidates.
-async function openUpload(){state.uploadFiles=[];$('file-input').value='';$('upload-tags').value='';$('upload-product-search').value='';$('upload-kind').value='产品图';$('upload-angle').value='正面';$('upload-background').value='透明';await fillProductSelect('upload');renderUploadFiles();$('upload-dialog').showModal();}
+async function openUpload(){state.uploadFiles=[];state.uploadFinished=false;$('file-input').value='';$('upload-tags').value='';$('upload-product-search').value='';$('upload-kind').value='产品图';$('upload-angle').value='正面';$('upload-background').value='透明';await fillProductSelect('upload');renderUploadFiles();$('upload-dialog').showModal();}
 $('open-upload').onclick=guarded(openUpload);$('empty-upload').onclick=guarded(openUpload);
-function addFiles(files){if(state.uploading)return;for(const file of files){if(state.uploadFiles.length>=30){toast('每批最多 30 张图片。',true);break;}if(!/\.(jpe?g|png|webp)$/i.test(file.name)){toast(`${file.name}：仅支持 JPG、PNG、WebP。`,true);continue;}if(file.size>25*1024*1024){toast(`${file.name}：超过 25 MB。`,true);continue;}if(state.uploadFiles.some(item=>item.file.name===file.name&&item.file.size===file.size&&item.file.lastModified===file.lastModified))continue;state.uploadFiles.push({file,status:'等待上传',done:false,error:false});}renderUploadFiles();}
-function renderUploadFiles(){$('upload-files').innerHTML=state.uploadFiles.map((item,index)=>`<div class="upload-row"><span class="file-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span><small>${bytes(item.file.size)}</small><span class="file-status ${item.error?'error':''}">${escapeHtml(item.status)}</span>${!state.uploading&&!item.done?`<button data-remove-file="${index}" aria-label="移除文件">×</button>`:''}</div>`).join('');const done=state.uploadFiles.filter(item=>item.done).length;const count=state.uploadFiles.length;$('upload-summary').textContent=count?`${count} 张图片 · ${done} 张已处理`:'尚未选择文件';$('start-upload').disabled=!count||done===count||state.uploading;$('start-upload').innerHTML=icon('upload')+(state.uploading?'正在上传…':done>0&&done<count?'重试未完成图片':'开始上传');}
+function addFiles(files){if(state.uploading)return;for(const file of files){if(state.uploadFiles.length>=30){toast('每批最多 30 张图片。',true);break;}if(!/\.(jpe?g|png|webp)$/i.test(file.name)){toast(`${file.name}：仅支持 JPG、PNG、WebP。`,true);continue;}if(file.size>25*1024*1024){toast(`${file.name}：超过 25 MB。`,true);continue;}if(state.uploadFiles.some(item=>item.file.name===file.name&&item.file.size===file.size&&item.file.lastModified===file.lastModified))continue;state.uploadFinished=false;state.uploadFiles.push({file,status:'等待上传',done:false,error:false,duplicate:false});}renderUploadFiles();}
+function uploadCounts(){
+  return {success:state.uploadFiles.filter(item=>item.done&&!item.duplicate).length,duplicate:state.uploadFiles.filter(item=>item.done&&item.duplicate).length,failed:state.uploadFiles.filter(item=>item.error).length,pending:state.uploadFiles.filter(item=>!item.done&&!item.error).length};
+}
+function uploadResultText(counts){
+  return [counts.success?`成功上传 ${counts.success} 张`:'',counts.duplicate?`重复跳过 ${counts.duplicate} 张`:'',counts.failed?`${counts.failed} 张未完成，可重试`:''].filter(Boolean).join(' · ');
+}
+function renderUploadFiles(){
+  $('upload-files').innerHTML=state.uploadFiles.map((item,index)=>{
+    const tone=item.error?'is-error':item.done?(item.duplicate?'is-duplicate':'is-success'):'';
+    return `<div class="upload-row ${tone}"><span class="file-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span><small>${bytes(item.file.size)}</small><span class="file-status ${item.error?'error':''}">${item.done?icon('check'):item.error?icon('info'):''}<span>${escapeHtml(item.status)}</span></span>${!state.uploading&&!item.done?`<button data-remove-file="${index}" aria-label="移除文件">×</button>`:''}</div>`;
+  }).join('');
+  const counts=uploadCounts(),done=counts.success+counts.duplicate,count=state.uploadFiles.length;
+  const complete=!!count&&done===count&&!state.uploading;
+  const showResult=state.uploadFinished&&!state.uploading&&!!count&&!counts.pending;
+  $('upload-summary').textContent=count?(showResult?uploadResultText(counts):`${count} 张图片 · ${done} 张已处理`):'尚未选择文件';
+  $('upload-summary').classList.toggle('is-complete',complete);$('upload-summary').classList.toggle('has-errors',showResult&&counts.failed>0);
+  $('start-upload').disabled=!count||complete||state.uploading;
+  $('start-upload').classList.toggle('is-complete',complete);
+  $('start-upload').innerHTML=icon(complete?'check':'upload')+(state.uploading?'正在上传…':complete?'已完成':counts.failed||done>0?'重试未完成图片':'开始上传');
+  $('upload-result').classList.toggle('hidden',!showResult);
+  if(showResult){
+    const tone=counts.failed?(done?'warning':'error'):'success';
+    $('upload-result').className='upload-result '+tone;
+    $('upload-result-icon').innerHTML=icon(counts.failed?'info':'check');
+    $('upload-result-title').textContent=counts.failed?(done?'部分图片未完成':'本批上传未完成'):counts.success?'上传完成':'本批处理完成';
+    $('upload-result-detail').textContent=uploadResultText(counts);
+  }
+}
 $('dropzone').onclick=()=>{if(!state.uploading)$('file-input').click();};$('dropzone').onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();if(!state.uploading)$('file-input').click();}};$('file-input').onchange=event=>{addFiles(event.target.files);event.target.value='';};
 for(const type of ['dragenter','dragover'])$('dropzone').addEventListener(type,event=>{event.preventDefault();$('dropzone').classList.add('dragover');});for(const type of ['dragleave','drop'])$('dropzone').addEventListener(type,event=>{event.preventDefault();$('dropzone').classList.remove('dragover');if(type==='drop')addFiles(event.dataTransfer.files);});
 $('upload-files').onclick=event=>{const remove=event.target.closest('[data-remove-file]');if(remove&&!state.uploading){state.uploadFiles.splice(Number(remove.dataset.removeFile),1);renderUploadFiles();}};
-function uploadRequest(form, item){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST','/api/images/upload');xhr.timeout=180000;xhr.upload.onprogress=event=>{if(event.lengthComputable){item.status=Math.round(event.loaded/event.total*100)+'% · 上传中';renderUploadFiles();}};xhr.onload=()=>{let result={};try{result=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300)resolve(result);else reject(new Error(typeof result.detail==='string'?result.detail:'上传失败，请检查文件或重新登录。'));};xhr.onerror=()=>reject(new Error('连接中断，请重试。'));xhr.ontimeout=()=>reject(new Error('上传超时，请重试。'));xhr.send(form);});}
-$('start-upload').onclick=guarded(async()=>{state.uploading=true;const inputs=['upload-product-search','upload-product','upload-kind','upload-angle','upload-background','upload-tags'];const values={};for(const key of ['product','kind','angle','background','tags'])values[key]=$('upload-'+key).value;inputs.forEach(id=>$(id).disabled=true);renderUploadFiles();try{for(const item of state.uploadFiles){if(item.done)continue;item.error=false;item.status='准备上传…';renderUploadFiles();const form=new FormData();form.append('file',item.file);for(const [key,value]of Object.entries(values))form.append(key==='product'?'product_id':key,value);try{await prepareCloudUpload(form,item.file);const result=await uploadRequest(form,item);item.done=true;item.status=result.duplicate?'已存在 · 已跳过':'上传成功';}catch(error){item.error=true;item.status=error.message;}renderUploadFiles();}await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products')await loadProducts();const failed=state.uploadFiles.filter(item=>!item.done).length;toast(failed?`${failed} 张未完成，可修改后重试。`:'本批图片已处理完成。',failed>0);}finally{state.uploading=false;inputs.forEach(id=>$(id).disabled=false);renderUploadFiles();}});
+function uploadRequest(form, item){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST','/api/images/upload');xhr.timeout=180000;xhr.upload.onprogress=event=>{if(event.lengthComputable){const percent=Math.round(event.loaded/event.total*100);item.status=percent===100?'100% · 正在保存…':percent+'% · 上传中';renderUploadFiles();}};xhr.onload=()=>{let result={};try{result=JSON.parse(xhr.responseText);}catch{}if(xhr.status>=200&&xhr.status<300){if(typeof result.duplicate==='boolean'&&result.image?.id)resolve(result);else reject(new Error('服务器未确认保存结果，请重试。'));}else reject(new Error(typeof result.detail==='string'?result.detail:'上传失败，请检查文件或重新登录。'));};xhr.onerror=()=>reject(new Error('连接中断，请重试。'));xhr.ontimeout=()=>reject(new Error('上传超时，请重试。'));xhr.send(form);});}
+$('start-upload').onclick=guarded(async()=>{
+  if(state.uploading||!state.uploadFiles.some(item=>!item.done))return;
+  state.uploading=true;state.uploadFinished=false;
+  const inputs=['upload-product-search','upload-product','upload-kind','upload-angle','upload-background','upload-tags'],values={};
+  for(const key of ['product','kind','angle','background','tags'])values[key]=$('upload-'+key).value;
+  inputs.forEach(id=>$(id).disabled=true);renderUploadFiles();let completed=false;
+  try{
+    for(const item of state.uploadFiles){
+      if(item.done)continue;
+      item.error=false;item.duplicate=false;item.status='准备上传…';renderUploadFiles();
+      try{
+        const form=new FormData();form.append('file',item.file);
+        for(const [key,value]of Object.entries(values))form.append(key==='product'?'product_id':key,value);
+        await prepareCloudUpload(form,item.file);const result=await uploadRequest(form,item);
+        item.done=true;item.duplicate=!!result.duplicate;item.status=item.duplicate?'已存在 · 已跳过':'上传成功';
+      }catch(error){item.error=true;item.status='失败 · '+error.message;}
+      renderUploadFiles();
+    }
+    completed=true;
+  }finally{state.uploading=false;state.uploadFinished=completed;inputs.forEach(id=>$(id).disabled=false);renderUploadFiles();}
+  const counts=uploadCounts();toast(uploadResultText(counts),counts.failed>0);
+  try{await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products')await loadProducts();}
+  catch{toast('上传结果已保留，列表刷新失败，请点击页面刷新按钮。',true);}
+});
 // Detail dialog opens immediately; stale responses can never replace another image.
 const detailState={request:0,id:'',ready:false,saving:false};
 function detailControls(){
