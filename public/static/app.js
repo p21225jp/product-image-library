@@ -12,7 +12,6 @@ const icons = {
   search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   shield:'<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6z"/><path d="m8 12 3 3 5-6"/>',
   lock:'<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/>',
-  spark:'<path d="m12 3 2.3 6.7L21 12l-6.7 2.3L12 21l-2.3-6.7L3 12l6.7-2.3zM20 2v4M18 4h4"/>',
   trash:'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
   clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
   refresh:'<path d="M20 7v5h-5M4 17v-5h5M5.5 7a8 8 0 0 1 13-2L20 8M4 16l1.5 3a8 8 0 0 0 13-2"/>',
@@ -69,7 +68,7 @@ async function boot() {
     if(previous&&(previous.role!==status.role||previous.logged_in!==status.logged_in||previous.account_id!==status.account_id)){
       invalidateProductOptions();detailState.request++;state.request++;state.productRequest++;
       state.selected.clear();document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());
-      $('token-secret').value='';$('new-token').classList.add('hidden');$('token-list').innerHTML='';$('activity-table').innerHTML='';$('account-table').innerHTML='';$('account-password').value='';$('account-error').textContent='';
+      $('activity-table').innerHTML='';$('account-table').innerHTML='';$('account-password').value='';$('account-error').textContent='';
     }
     $('loading').classList.add('hidden');$('auth').classList.add('hidden');$('app').classList.remove('hidden');
     const role=status.role||'anonymous',canEdit=role==='admin',isStaff=canEdit||role==='staff';
@@ -89,8 +88,8 @@ async function boot() {
       options(prefix+'-angle',status.angles,prefix==='filter'?'全部角度':null);
       options(prefix+'-background',status.backgrounds,prefix==='filter'?'全部背景':null);
     }
-    $('upload-background').value='透明';$('server-origin').textContent=location.origin;
-    $('token-scope').value='read';$('confirm-wrap').classList.add('hidden');$('password-confirm').required=false;
+    $('upload-background').value='透明';
+    $('confirm-wrap').classList.add('hidden');$('password-confirm').required=false;
     await switchView(state.view);
   }catch(error){$('app').classList.add('hidden');$('loading').classList.remove('hidden');$('loading').innerHTML=`${icon('info')}<p>连接未完成：${escapeHtml(error.message)}</p><button class="button secondary" id="retry-connection">重试</button>`;$('retry-connection').onclick=boot;}
 }
@@ -107,7 +106,7 @@ $('logout').onclick=guarded(async()=>{
   if(state.uploading){toast('图片上传中，请等待当前批次完成。');return;}
   await api('/api/logout',{method:'POST'});await boot();toast('已退出登录，可继续查询和下载素材。');
 });
-const viewInfo={library:['全部图片','YOUR PRODUCT ASSETS','每个产品，都有清晰的素材归属。'],unassigned:['待整理','A LITTLE ORGANIZATION','为这些图片关联产品，让下一次查找更准确。'],products:['产品目录','THE PRODUCT INDEX','用 SKU、名称与别名，建立统一的产品索引。'],integrations:['AI 取图','CONNECT YOUR WORKFLOW','让智能体通过受控接口，找到你需要的素材。'],activity:['操作记录','WORKSPACE ACTIVITY','上传、下载与资料修改，都有迹可循。'],team:['账号管理','TEAM ACCESS','内部成员可派发令牌，外部客户只能凭账号浏览下载。'],trash:['回收站','A SECOND CHANCE','移入回收站的图片仍保留原文件，可随时恢复。']};
+const viewInfo={library:['全部图片','YOUR PRODUCT ASSETS','每个产品，都有清晰的素材归属。'],unassigned:['待整理','A LITTLE ORGANIZATION','为这些图片关联产品，让下一次查找更准确。'],products:['产品目录','THE PRODUCT INDEX','用 SKU、名称与别名，建立统一的产品索引。'],activity:['操作记录','WORKSPACE ACTIVITY','上传、下载与资料修改，都有迹可循。'],team:['账号管理','TEAM ACCESS','浏览下载无需登录，管理功能按角色开放。'],trash:['回收站','A SECOND CHANCE','移入回收站的图片仍保留原文件，可随时恢复。']};
 function clearPageSearch() {
   delayedImageSearch.cancel();delayedProductSearch.cancel();
   // Responses from the previous page must not restore its search results.
@@ -121,9 +120,9 @@ function clearPageSearch() {
   renderProductPagination();
 }
 async function switchView(view, {productCode=''}={}) {
+  if(!viewInfo[view])view='library';
   const staffNow=state.status.role==='admin'||state.status.role==='staff';
-  if((!staffNow&&['integrations','activity','team','trash'].includes(view))||(state.status.role!=='admin'&&['activity','team','trash'].includes(view)))view='library';
-  if(state.view==='integrations'&&view!=='integrations') {$('token-secret').value='';$('new-token').classList.add('hidden');}
+  if((!staffNow&&['activity','team','trash'].includes(view))||(state.status.role!=='admin'&&['activity','team','trash'].includes(view)))view='library';
   const navigation=++state.navigationRequest;
   clearPageSearch();
   if(view==='library'&&productCode){state.productCode=productCode;$('search').value=productCode;}
@@ -131,17 +130,17 @@ async function switchView(view, {productCode=''}={}) {
   const [title,eyebrow,description]=viewInfo[view];$('breadcrumb-current').textContent=title;$('page-title').innerHTML=escapeHtml(title)+'<span class="title-dot">.</span>';$('page-eyebrow').textContent=eyebrow;$('page-description').textContent=description;
   document.querySelectorAll('.nav-item').forEach(button=>button.classList.toggle('active',button.dataset.view===view));
   const isLibrary=['library','unassigned','trash'].includes(view);
-  $('library-view').classList.toggle('hidden',!isLibrary);$('products-view').classList.toggle('hidden',view!=='products');$('integrations-view').classList.toggle('hidden',view!=='integrations');$('activity-view').classList.toggle('hidden',view!=='activity');$('team-view').classList.toggle('hidden',view!=='team');
+  $('library-view').classList.toggle('hidden',!isLibrary);$('products-view').classList.toggle('hidden',view!=='products');$('activity-view').classList.toggle('hidden',view!=='activity');$('team-view').classList.toggle('hidden',view!=='team');
   // Internal members may read, download, upload and organise; deleting stays with the administrator.
   const canUpload=state.status.role==='admin'||state.status.role==='staff';
-  $('open-upload').classList.toggle('hidden',!canUpload||['integrations','activity','trash'].includes(view));$('new-product').classList.toggle('hidden',!canUpload||['integrations','activity','trash'].includes(view));$('select-page').classList.remove('hidden');
+  $('open-upload').classList.toggle('hidden',!canUpload||['activity','trash'].includes(view));$('new-product').classList.toggle('hidden',!canUpload||['activity','trash'].includes(view));$('select-page').classList.remove('hidden');
   await loadOverview();
   if(navigation!==state.navigationRequest)return;
-  renderSelection();if(isLibrary) await loadImages(); else if(view==='products'){await loadProductCategories();if(navigation!==state.navigationRequest)return;await loadProducts();} else if(view==='integrations') await loadTokens(); else if(view==='team') await loadTeam(); else await loadAudit();
+  renderSelection();if(isLibrary) await loadImages(); else if(view==='products'){await loadProductCategories();if(navigation!==state.navigationRequest)return;await loadProducts();} else if(view==='team') await loadTeam(); else await loadAudit();
 }
 // Delegate on the whole sidebar: some entries (账号管理) sit outside <nav>.
 document.querySelector('.sidebar').addEventListener('click',event=>{const button=event.target.closest('[data-view]');if(button)guarded(switchView)(button.dataset.view);});
-$('refresh').onclick=guarded(async()=>{if(await syncSession()){toast('登录状态已更新');return;}invalidateProductOptions();await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products'){await loadProductCategories();await loadProducts();}else if(state.view==='activity')await loadAudit();else if(state.view==='team')await loadTeam();else await loadTokens();toast('已刷新');});
+$('refresh').onclick=guarded(async()=>{if(await syncSession()){toast('登录状态已更新');return;}invalidateProductOptions();await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products'){await loadProductCategories();await loadProducts();}else if(state.view==='activity')await loadAudit();else if(state.view==='team')await loadTeam();toast('已刷新');});
 async function loadOverview() {
   const result=await api('/api/overview');
   for(const [key,label] of [['images','张'],['products','个'],['transparent','张']]) $('stat-'+key).innerHTML=result[key].toLocaleString()+'<small>'+label+'</small>';
@@ -521,7 +520,7 @@ async function loadAccounts(){
   const rows=result.items.map(item=>{
     const staff=item.role==="staff";
     const name=escapeHtml(item.username);
-    const rights=staff?"浏览 · 下载 · 上传 · 产品管理 · 图片关联 · 创建取图令牌":"浏览 · 下载";
+    const rights=staff?"浏览 · 下载 · 上传 · 产品管理 · 图片关联":"浏览 · 下载";
     return `<tr><td><strong>${name}</strong></td><td>${staff?"内部账号":"外部账号"}</td>`+
       `<td class="subtext">${rights}</td><td class="subtext">${date(item.created_at)}</td>`+
       `<td><button class="text-button" data-reset-account="${item.id}" data-account-name="${name}">重置密码</button> `+
@@ -556,14 +555,10 @@ $("account-table").onclick=guarded(async event=>{
   }
   if(remove){
     const name=remove.dataset.accountName;
-    if(!confirm(`删除账号「${name}」？\n\n该账号将无法登录，它创建的令牌也会一并作废。`))return;
+    if(!confirm(`删除账号「${name}」？\n\n该账号将无法登录，该账号的登录会话会立即失效。`))return;
     await api("/api/accounts/"+remove.dataset.deleteAccount,{method:"DELETE"});
     toast(`账号「${name}」已删除`);await loadAccounts();
   }
 });
-async function loadTokens(){const result=await api('/api/tokens');if(!['admin','staff'].includes(state.status.role))return;$('token-list').innerHTML=result.items.map(item=>{const meta=[escapeHtml(item.prefix)+'••••',item.scope==='products:create+images:associate'?'可新建产品和关联图片':item.scope==='products:create'?'可新建产品':item.scope==='images:associate'?'可关联图片':'查询下载'+(item.owner?' / 上传':''),date(item.created_at),item.last_used_at?'最后使用 '+date(item.last_used_at):'尚未使用',item.owner&&state.status.role==='admin'?'由 '+escapeHtml(item.owner)+' 创建':''].filter(Boolean).join(' · ');return `<div class="token-item"><div>${escapeHtml(item.name)}<small>${meta}</small></div><button class="text-button danger" data-revoke="${item.id}">撤销</button></div>`;}).join('')||'<p class="small">还没有访问令牌。</p>';}
-$('token-form').onsubmit=guarded(async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const scope=state.status.role==='admin'?$('token-scope').value:'read';const result=await api('/api/tokens',{method:'POST',body:JSON.stringify({name:$('token-name').value,scope})});$('token-secret').value=result.token;$('new-token').classList.remove('hidden');$('token-name').value='';await loadTokens();}finally{button.disabled=false;}});
-$('copy-token').onclick=guarded(async()=>{const input=$('token-secret');if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(input.value);else{input.select();if(!document.execCommand('copy'))throw new Error('请选中令牌手动复制。');}toast('令牌已复制，请保存在工具的凭据配置中。');});
-$('token-list').onclick=guarded(async event=>{const button=event.target.closest('[data-revoke]');if(!button||!confirm('撤销后，使用此令牌的工具将失去相应授权。确定撤销？'))return;await api('/api/tokens/'+button.dataset.revoke,{method:'DELETE'});await loadTokens();toast('令牌已撤销');});
 async function loadAudit(){const result=await api('/api/audit');if(state.status.role!=='admin')return;$('activity-table').innerHTML=`<div class="table-wrap"><table><thead><tr><th>操作</th><th>操作者</th><th>对象 / 详情</th><th>时间</th></tr></thead><tbody>${result.items.map(item=>`<tr><td><strong>${escapeHtml(item.action)}</strong></td><td>${item.actor==='anonymous'?'未登录访客':item.actor==='admin'||item.actor.startsWith('admin:')?'管理员':item.actor.startsWith('staff:')?'内部成员':item.actor==='访客'||item.actor.startsWith('external:')?'外部访客':'授权工具'}</td><td><span class="subtext">${escapeHtml(item.detail||'—')}</span></td><td>${date(item.created_at)}</td></tr>`).join('')||'<tr><td colspan="4" class="table-empty">还没有操作记录。</td></tr>'}</tbody></table></div><p class="subtext">显示最近 100 条记录。</p>`;}
 boot();

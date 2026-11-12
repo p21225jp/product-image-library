@@ -5,10 +5,9 @@ import { zipStream } from './zip';
 import { inspectImage } from './image-format';
 
 type Env = { DB:D1Database; BUCKET:R2Bucket };
-type Actor = { role:string; id?:string|null; token?:boolean; upload?:boolean; createProducts?:boolean; associateImages?:boolean };
+type Actor = { role:string; id?:string|null };
 type Row = Record<string,any>;
 const KINDS=['产品图','场景图','其他'], ANGLES=['正面','背面','侧面','俯视','仰视','其他'], BACKGROUNDS=['透明','其他'];
-const COMBINED_SCOPE='products:create+images:associate';
 const now=()=>Math.floor(Date.now()/1000), id=()=>randomBytes(16).toString('hex');
 const hash=(v:string|Uint8Array)=>createHash('sha256').update(v).digest('hex');
 const norm=(v:any)=>String(v??'').normalize('NFKC').trim();
@@ -22,11 +21,9 @@ const text=(v:any,min=0,max=200)=>{if(typeof v!=='string'||v.length<min||v.lengt
 const strings=(v:any,limit:number,length:number)=>{if(!Array.isArray(v)||v.length>limit||v.some(x=>typeof x!=='string'))fail(422,'列表内容或数量无效。');return [...new Set(v.map((x:string)=>norm(x).slice(0,length)).filter(Boolean))];};
 const imageIds=(v:any)=>{if(!Array.isArray(v)||!v.length||v.length>100||v.some(x=>typeof x!=='string'||!/^[a-f0-9]{32}$/.test(x)))fail(400,'请选择 1 至 100 张有效图片。');return [...new Set(v)] as string[];};
 const choices=(b:Row)=>{if(!KINDS.includes(b.kind)||!ANGLES.includes(b.angle)||!BACKGROUNDS.includes(b.background))fail(400,'图片类型、角度或背景无效。');};
-const staff=(a:Actor)=>{if(a.token||!['admin','staff'].includes(a.role))fail(403,'此操作需要内部账号登录。');};
-const admin=(a:Actor)=>{if(a.token||a.role!=='admin')fail(403,'此操作需要管理员登录。');};
-const productCreator=(a:Actor)=>{if(a.token){if(!a.createProducts)fail(403,'新建产品需要管理员签发的 products:create 或新建产品与关联图片的联合授权令牌。');}else staff(a);};
-const imageAssociator=(a:Actor)=>{if(a.token){if(!a.associateImages)fail(403,'关联图片需要管理员签发的 images:associate 或新建产品与关联图片的联合授权令牌。');}else staff(a);};
-const label=(a:Actor)=>a.token?'token:'+a.id:a.role+(a.id?':'+a.id:'');
+const staff=(a:Actor)=>{if(!['admin','staff'].includes(a.role))fail(403,'此操作需要内部账号登录。');};
+const admin=(a:Actor)=>{if(a.role!=='admin')fail(403,'此操作需要管理员登录。');};
+const label=(a:Actor)=>a.role+(a.id?':'+a.id:'');
 const accountJSON=(r:Row)=>({id:r.id,username:r.username,role:r.role,created_at:r.created_at,disabled:!!r.disabled_at});
 const productJSON=(r:Row)=>({...r,aliases:JSON.parse(r.aliases)});
 const imageJSON=(r:Row)=>{const {sha256,...rest}=r;return {...rest,tags:JSON.parse(r.tags),has_alpha:!!r.has_alpha,thumbnail_url:`/api/images/${r.id}/file?variant=thumbnail`,download_url:`/api/images/${r.id}/file`};};
@@ -39,15 +36,10 @@ function query(env:Env){
 function bound(q:URLSearchParams,name:string,defaultValue:number,min:number,max:number){const raw=q.get(name);const n=raw===null?defaultValue:Number(raw);if(!Number.isInteger(n)||n<min||n>max)fail(422,'分页或筛选参数无效。');return n;}
 async function body(req:Request){try{return await req.json() as Row;}catch{fail(400,'请求内容不是有效的 JSON。');}}
 async function actor(req:Request,env:Env,optional=false):Promise<Actor|null>{
-  const db=query(env), authorization=req.headers.get('authorization')||'';
-  if(authorization.startsWith('Bearer ')){
-    const r=await db.one('SELECT t.*,a.role owner_role,a.disabled_at,a.id owner_id FROM tokens t LEFT JOIN accounts a ON a.id=t.account_id WHERE t.hash=?',hash(authorization.slice(7)));
-    if(r&&(!r.account_id||(r.owner_id&&r.disabled_at===null))){await db.run('UPDATE tokens SET last_used_at=? WHERE id=?',now(),r.id);return {role:'token',id:r.id,token:true,upload:r.owner_role==='staff',createProducts:['products:create',COMBINED_SCOPE].includes(r.scope)&&(!r.account_id||r.owner_role==='admin'),associateImages:['images:associate',COMBINED_SCOPE].includes(r.scope)&&(!r.account_id||r.owner_role==='admin')};}
-  }else{
-    const cookie=(req.headers.get('cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('asset_session='))?.slice(14);
-    if(cookie){const s=await db.one('SELECT * FROM sessions WHERE hash=? AND expires>?',hash(cookie),now());if(s){if(s.role==='admin'&&!s.account_id)return {role:'admin'};const a=await db.one('SELECT * FROM accounts WHERE id=? AND disabled_at IS NULL',s.account_id);if(a)return {role:a.role,id:a.id};}}
-  }
-  if(optional)return null;fail(401,'请先登录，或提供有效的访问令牌。');
+  if(req.headers.has('authorization'))fail(401,'工具令牌访问已停用，请通过网页登录素材账号。');
+  const db=query(env),cookie=(req.headers.get('cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('asset_session='))?.slice(14);
+  if(cookie){const session=await db.one('SELECT * FROM sessions WHERE hash=? AND expires>?',hash(cookie),now());if(session){if(session.role==='admin'&&!session.account_id)return {role:'admin'};const account=await db.one('SELECT * FROM accounts WHERE id=? AND disabled_at IS NULL',session.account_id);if(account)return {role:account.role,id:account.id};}}
+  if(optional)return null;fail(401,'请先登录素材账号。');
 }
 async function cleanup(env:Env){const db=query(env);for(const r of await db.all('SELECT * FROM pending_deletes LIMIT 100')){try{await env.BUCKET.delete([`originals/${r.id}.${r.extension}`,`thumbnails/${r.id}.webp`]);await db.run('DELETE FROM pending_deletes WHERE id=?',r.id);}catch{/* Durable queue is retried on subsequent requests. */}}}
 async function image(env:Env,key:string,deleted=false){const row=await query(env).one(SELECT_IMAGE+' WHERE i.id=?'+(deleted?'':' AND i.deleted_at IS NULL'),key);if(!row)fail(404,'图片不存在或已移入回收站。');return row;}
@@ -77,11 +69,10 @@ async function route(req:Request,env:Env){
     const origin=req.headers.get('origin');if(origin&&origin!==u.origin)fail(403,'拒绝跨站请求。');
     if(req.headers.get('sec-fetch-site')==='cross-site')fail(403,'拒绝跨站请求。');
   }
+  if(path==='/api/tokens'||/^\/api\/tokens\/[a-f0-9]{32}$/.test(path)||path==='/api/openapi.json')fail(404,'接口不存在。');
   const authenticated=await actor(req,env,true);
-  // Invalid explicit credentials remain errors; do not silently accept a revoked tool token.
-  if(!authenticated&&req.headers.has('authorization'))fail(401,'访问令牌无效或已撤销。');
   const a:Actor=authenticated||{role:'anonymous'};
-  if(path==='/api/status'&&method==='GET')return json({configured:!!await db.one("SELECT value FROM settings WHERE key='password_hash'"),logged_in:!!authenticated&&!a.token,role:a.token?null:a.role,account_id:authenticated&&!a.token?(a.id||'owner'):null,can_setup:false,can_issue_tokens:!a.token&&['admin','staff'].includes(a.role),can_associate_images:a.token?!!a.associateImages:['admin','staff'].includes(a.role),can_create_products:a.token?!!a.createProducts:['admin','staff'].includes(a.role),max_upload_mb:25,kinds:KINDS,angles:ANGLES,backgrounds:BACKGROUNDS,cloud:true});
+  if(path==='/api/status'&&method==='GET')return json({configured:!!await db.one("SELECT value FROM settings WHERE key='password_hash'"),logged_in:!!authenticated,role:a.role,account_id:authenticated?(a.id||'owner'):null,can_setup:false,can_associate_images:['admin','staff'].includes(a.role),can_create_products:['admin','staff'].includes(a.role),max_upload_mb:25,kinds:KINDS,angles:ANGLES,backgrounds:BACKGROUNDS,cloud:true});
   if(path==='/api/login'&&method==='POST'){
     const b=await body(req);text(b.username,3,40);text(b.password,1,200);
     const key=hash((req.headers.get('cf-connecting-ip')||'unknown')+':'+b.username.toLowerCase()),t=now();
@@ -98,15 +89,13 @@ async function route(req:Request,env:Env){
   if(path==='/api/setup')fail(403,'云端使用已迁移的管理员账号。');
   const anonymousRead=method==='GET'&&(['/api/overview','/api/products','/api/categories','/api/images'].includes(path)||/^\/api\/images\/[a-f0-9]{32}(?:\/file)?$/.test(path));
   const anonymousPost=method==='POST'&&['/api/export','/api/logout'].includes(path);
-  if(!authenticated&&!anonymousRead&&!anonymousPost)fail(401,'此操作需要登录，或提供有效的授权令牌。');
+  if(!authenticated&&!anonymousRead&&!anonymousPost)fail(401,'此操作需要登录素材账号。');
   const audit=async(action:string,detail='')=>db.run('INSERT INTO audit(action,actor,detail,created_at) VALUES(?,?,?,?)',action,label(a),detail.slice(0,500),now());
   if(path==='/api/logout'&&method==='POST'){
-    if(a.token)fail(403,'请使用浏览器账号退出。');
     const cookie=(req.headers.get('cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('asset_session='))?.slice(14)||'';await db.run('DELETE FROM sessions WHERE hash=?',hash(cookie));return json({ok:true},200,{'Set-Cookie':'asset_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'});
   }
   if(path==='/api/network'){admin(a);return json({addresses:[u.origin],public_origin:u.origin});}
   if(path==='/api/overview'){
-    if(a.token)fail(403,'概览需要浏览器账号登录。');
     const counts=await db.one('SELECT count(*) images,coalesce(sum(size),0) total_bytes,coalesce(sum(CASE WHEN product_id IS NULL THEN 1 ELSE 0 END),0) unassigned,coalesce(sum(has_alpha),0) transparent FROM images WHERE deleted_at IS NULL');
     return json({...counts,products:(await db.one('SELECT count(*) n FROM products'))!.n,trash:a.role==='admin'?(await db.one('SELECT count(*) n FROM images WHERE deleted_at IS NOT NULL'))!.n:0,categories:(await db.all('SELECT name FROM categories ORDER BY name')).map(r=>r.name)});
   }
@@ -134,12 +123,12 @@ async function route(req:Request,env:Env){
       const where=clauses.length?' WHERE '+clauses.join(' AND '):'';const total=(await db.one('SELECT count(*) n FROM products p'+where,...params))!.n;
       const rows=await db.all('SELECT p.*,(SELECT count(*) FROM images i WHERE i.product_id=p.id AND i.deleted_at IS NULL) image_count FROM products p'+where+' ORDER BY (p.code=? COLLATE NOCASE) DESC,p.created_at DESC,p.id LIMIT ? OFFSET ?',...params,search,bound(q,'limit',100,1,200),bound(q,'offset',0,0,1e9));return json({items:rows.map(productJSON),total});
     }
-    if(method==='POST'){productCreator(a);const b=await body(req),values=await productValues(env,b),key=id();await db.run('INSERT INTO products(id,code,name,category,aliases,created_at) VALUES(?,?,?,?,?,?)',key,...values,now());await audit('新建产品',values[0]);return json(productJSON((await db.one('SELECT * FROM products WHERE id=?',key))!));}
+    if(method==='POST'){staff(a);const b=await body(req),values=await productValues(env,b),key=id();await db.run('INSERT INTO products(id,code,name,category,aliases,created_at) VALUES(?,?,?,?,?,?)',key,...values,now());await audit('新建产品',values[0]);return json(productJSON((await db.one('SELECT * FROM products WHERE id=?',key))!));}
   }
   m=path.match(/^\/api\/products\/([a-f0-9]{32})(?:\/(deletion-preview|images\/associate))?$/);
   if(m){const key=m[1],row=await db.one('SELECT * FROM products WHERE id=?',key);if(!row)fail(404,'产品不存在，请刷新产品目录。');
     if(m[2]==='images/associate'&&method==='POST'){
-      imageAssociator(a);const ids=imageIds((await body(req)).image_ids);const existing=await db.all(`SELECT id,product_id,deleted_at FROM images WHERE id IN (${marks(ids)})`,...ids);
+      staff(a);const ids=imageIds((await body(req)).image_ids);const existing=await db.all(`SELECT id,product_id,deleted_at FROM images WHERE id IN (${marks(ids)})`,...ids);
       if(existing.length!==ids.length||existing.some(r=>r.deleted_at!==null||(r.product_id&&r.product_id!==key)))fail(409,'部分图片已删除或关联到其他产品，本次未关联任何图片。');
       const pending=existing.filter(r=>!r.product_id).length;
       await mutation(env,`EXISTS(SELECT 1 FROM products WHERE id=?) AND (SELECT count(*) FROM images WHERE id IN (${marks(ids)}) AND deleted_at IS NULL AND (product_id IS NULL OR product_id=?))=?`,[key,...ids,key,ids.length],[db.stmt(`UPDATE images SET product_id=? WHERE id IN (${marks(ids)}) AND product_id IS NULL`,key,...ids)]);
@@ -159,7 +148,7 @@ async function route(req:Request,env:Env){
     return json({items:(await db.all(SELECT_IMAGE+where+' ORDER BY (p.code=? COLLATE NOCASE) DESC,i.created_at DESC,i.id LIMIT ? OFFSET ?',...params,search,bound(q,'limit',48,1,100),bound(q,'offset',0,0,1e9))).map(imageJSON),total});
   }
   if(path==='/api/images/upload'&&method==='POST'){
-    if(!['admin','staff'].includes(a.role)&&!a.upload)fail(403,'外部账号和只读令牌不可上传图片。');
+    staff(a);
     const length=Number(req.headers.get('content-length'));if(!Number.isFinite(length)||length>28*1024*1024)fail(413,'上传内容超过允许大小。');
     const form=await req.formData(),file=form.get('file') as File,thumb=form.get('thumbnail') as File;
     if(!file||typeof file.arrayBuffer!=='function'||!file.size||file.size>25*1024*1024)fail(400,'请选择 25 MB 以内的 JPG、PNG 或 WebP 图片。');
@@ -185,7 +174,7 @@ async function route(req:Request,env:Env){
   }
   m=path.match(/^\/api\/images\/([a-f0-9]{32})(?:\/(file|restore))?$/);
   if(m){
-    const key=m[1],variant=q.get('variant')||'original',row=await image(env,key,(a.role==='admin'&&!a.token)&&(m[2]==='restore'||variant==='thumbnail'));
+    const key=m[1],variant=q.get('variant')||'original',row=await image(env,key,(a.role==='admin')&&(m[2]==='restore'||variant==='thumbnail'));
     if(m[2]==='file'&&method==='GET'){
       if(!['original','thumbnail'].includes(variant))fail(422,'图片版本无效。');
       const object=await env.BUCKET.get(variant==='thumbnail'?`thumbnails/${key}.webp`:`originals/${key}.${row.extension}`);if(!object)fail(404,'图片文件不存在。');if(variant==='original')await audit('下载原图',key);
@@ -204,23 +193,7 @@ async function route(req:Request,env:Env){
     const objects=[];for(const row of rows){const object=await env.BUCKET.get(`originals/${row.id}.${row.extension}`);if(!object)fail(404,'部分原图不存在。');objects.push({object,name:filename(row)});}
     await audit('批量下载',ids.join(','));return new Response(zipStream(objects),{headers:{'Content-Type':'application/zip','Content-Disposition':'attachment; filename="product-images.zip"'}});
   }
-  if(path==='/api/tokens'){
-    staff(a);
-    if(method==='GET')return json({items:await db.all('SELECT t.id,t.name,t.prefix,t.scope,t.created_at,t.last_used_at,a.username owner FROM tokens t LEFT JOIN accounts a ON a.id=t.account_id'+(a.role==='admin'?'':' WHERE t.account_id=?')+' ORDER BY t.created_at DESC',...(a.role==='admin'?[]:[a.id]))});
-    if(method==='POST'){
-      const b=await body(req),name=text(b.name,1,60).trim(),scope=b.scope??'read';if(!name)fail(400,'令牌名称不能为空。');
-      if(!['read','products:create','images:associate',COMBINED_SCOPE].includes(scope))fail(400,'令牌权限无效。');if(scope!=='read')admin(a);
-      const key=id(),secret='img_'+randomBytes(32).toString('base64url');await db.run('INSERT INTO tokens(id,name,hash,prefix,created_at,account_id,scope) VALUES(?,?,?,?,?,?,?)',key,name,hash(secret),secret.slice(0,10),now(),a.id||null,scope);await audit(scope===COMBINED_SCOPE?'授权工具新建产品和关联图片':scope==='products:create'?'授权工具新建产品':scope==='images:associate'?'授权工具关联图片':'创建令牌',name);return json({id:key,token:secret,name,scope});
-    }
-  }
-  m=path.match(/^\/api\/tokens\/([a-f0-9]{32})$/);if(m&&method==='DELETE'){staff(a);const row=await db.one('SELECT * FROM tokens WHERE id=?',m[1]);if(!row)fail(404,'令牌不存在。');if(a.role!=='admin'&&row.account_id!==a.id)fail(403,'只能撤销自己创建的令牌。');await db.run('DELETE FROM tokens WHERE id=?',m[1]);await audit('撤销令牌',row.name);return json({ok:true});}
   if(path==='/api/audit'){admin(a);await cleanup(env);return json({items:await db.all('SELECT * FROM audit ORDER BY id DESC LIMIT 100')});}
-  if(path==='/api/openapi.json'){
-    const paths:Record<string,any>=Object.fromEntries(['/api/products','/api/categories','/api/images','/api/images/{id}','/api/images/{id}/file'].map(p=>[p,{get:{responses:{200:{description:'查询结果'}},security:[{bearerAuth:[]}]}}]));
-    paths['/api/products'].post={summary:'新建产品',description:'MCP 调用需要管理员签发的 products:create 或 products:create+images:associate 令牌。重复 SKU 返回 409，不覆盖已有产品；分类必须已存在。',security:[{bearerAuth:[]}],requestBody:{required:true,content:{'application/json':{schema:{type:'object',required:['code','name'],properties:{code:{type:'string',minLength:1,maxLength:80,description:'产品 SKU，保留前导零'},name:{type:'string',minLength:1,maxLength:160},category:{type:'string',maxLength:80,default:''},aliases:{type:'array',maxItems:30,items:{type:'string',maxLength:100},default:[]}}}}}},responses:{200:{description:'已创建产品'},401:{description:'令牌无效'},403:{description:'未获管理员新建产品授权'},409:{description:'SKU 已存在'}}};
-    paths['/api/products/{id}/images/associate']={post:{summary:'批量关联已有图片',description:'需要管理员签发的 images:associate 或 products:create+images:associate 令牌；每批 1～100 张，已关联同一产品时跳过；任一图片已关联其他产品、在回收站或不存在时整批拒绝。',security:[{bearerAuth:[]}],requestBody:{required:true,content:{'application/json':{schema:{type:'object',required:['image_ids'],properties:{image_ids:{type:'array',minItems:1,maxItems:100,items:{type:'string',pattern:'^[a-f0-9]{32}$'}}}}}}},responses:{200:{description:'关联结果'},403:{description:'未授权'},409:{description:'图片归属冲突，整批未关联'}}}};
-    return json({openapi:'3.1.0',info:{title:'MKT团队素材空间',version:'1.1.0-cloud'},servers:[{url:u.origin}],paths,components:{securitySchemes:{bearerAuth:{type:'http',scheme:'bearer'}}}});
-  }
   fail(404,'接口不存在。');
 }
 export async function handleLibrary(req:Request,env:Env){
