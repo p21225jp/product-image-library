@@ -31,7 +31,7 @@ associationDialog.addEventListener('click',event=>{
 $('associate-close').onclick=closeAssociation;$('associate-cancel').onclick=closeAssociation;
 
 async function openAssociation(product){
-  if(state.status?.role!=='admin'||!product)return;
+  if(!['admin','staff'].includes(state.status?.role)||!product)return;
   delayedAssociationSearch.cancel();association.mode='pending';association.product=product;association.selected.clear();association.offset=0;association.items=[];association.total=0;
   $('associate-product-name').textContent=product.name;$('associate-product-code').textContent='SKU '+product.code;
   $('associate-existing').textContent='当前已关联 '+product.image_count+' 张';

@@ -77,8 +77,11 @@ async function route(req:Request,env:Env){
     const origin=req.headers.get('origin');if(origin&&origin!==u.origin)fail(403,'拒绝跨站请求。');
     if(req.headers.get('sec-fetch-site')==='cross-site')fail(403,'拒绝跨站请求。');
   }
-  const a=await actor(req,env,true);
-  if(path==='/api/status'&&method==='GET')return json({configured:!!await db.one("SELECT value FROM settings WHERE key='password_hash'"),logged_in:!!a&&!a.token,role:a&&!a.token?a.role:null,can_setup:false,can_issue_tokens:!!a&&!a.token&&['admin','staff'].includes(a.role),can_associate_images:!!a&&(a.token?!!a.associateImages:['admin','staff'].includes(a.role)),can_create_products:!!a&&(a.token?!!a.createProducts:['admin','staff'].includes(a.role)),max_upload_mb:25,kinds:KINDS,angles:ANGLES,backgrounds:BACKGROUNDS,cloud:true});
+  const authenticated=await actor(req,env,true);
+  // Invalid explicit credentials remain errors; do not silently accept a revoked tool token.
+  if(!authenticated&&req.headers.has('authorization'))fail(401,'访问令牌无效或已撤销。');
+  const a:Actor=authenticated||{role:'anonymous'};
+  if(path==='/api/status'&&method==='GET')return json({configured:!!await db.one("SELECT value FROM settings WHERE key='password_hash'"),logged_in:!!authenticated&&!a.token,role:a.token?null:a.role,account_id:authenticated&&!a.token?(a.id||'owner'):null,can_setup:false,can_issue_tokens:!a.token&&['admin','staff'].includes(a.role),can_associate_images:a.token?!!a.associateImages:['admin','staff'].includes(a.role),can_create_products:a.token?!!a.createProducts:['admin','staff'].includes(a.role),max_upload_mb:25,kinds:KINDS,angles:ANGLES,backgrounds:BACKGROUNDS,cloud:true});
   if(path==='/api/login'&&method==='POST'){
     const b=await body(req);text(b.username,3,40);text(b.password,1,200);
     const key=hash((req.headers.get('cf-connecting-ip')||'unknown')+':'+b.username.toLowerCase()),t=now();
@@ -93,7 +96,9 @@ async function route(req:Request,env:Env){
     return json({ok:true,role:account.role},200,{'Set-Cookie':`asset_session=${secret}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800${u.protocol==='https:'?'; Secure':''}`});
   }
   if(path==='/api/setup')fail(403,'云端使用已迁移的管理员账号。');
-  if(!a)fail(401,'请先登录，或提供有效的访问令牌。');
+  const anonymousRead=method==='GET'&&(['/api/overview','/api/products','/api/categories','/api/images'].includes(path)||/^\/api\/images\/[a-f0-9]{32}(?:\/file)?$/.test(path));
+  const anonymousPost=method==='POST'&&['/api/export','/api/logout'].includes(path);
+  if(!authenticated&&!anonymousRead&&!anonymousPost)fail(401,'此操作需要登录，或提供有效的授权令牌。');
   const audit=async(action:string,detail='')=>db.run('INSERT INTO audit(action,actor,detail,created_at) VALUES(?,?,?,?)',action,label(a),detail.slice(0,500),now());
   if(path==='/api/logout'&&method==='POST'){
     if(a.token)fail(403,'请使用浏览器账号退出。');

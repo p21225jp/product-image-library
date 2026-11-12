@@ -26,7 +26,7 @@ const icons = {
 const icon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name] || icons.image}</svg>`;
 document.querySelectorAll('[data-icon]').forEach(el => {el.innerHTML = icon(el.dataset.icon);});
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const state = {view:'library', status:null, images:[], products:[], selected:new Set(), offset:0, total:0, uploadFiles:[], uploading:false, uploadFinished:false, request:0, productRequest:0, navigationRequest:0, productCode:'', productCategory:'', productOffset:0, productPageSize:20, productTotal:0, productLoading:false, productError:false};
+const state = {view:'library', status:null, bootRequest:0, images:[], products:[], selected:new Set(), offset:0, total:0, uploadFiles:[], uploading:false, uploadFinished:false, request:0, productRequest:0, navigationRequest:0, productCode:'', productCategory:'', productOffset:0, productPageSize:20, productTotal:0, productLoading:false, productError:false};
 const bytes = number => number >= 1024 ** 3 ? `${(number / 1024 ** 3).toFixed(2)} GB` : number >= 1024 ** 2 ? `${(number / 1024 ** 2).toFixed(1)} MB` : `${(number / 1024).toFixed(1)} KB`;
 const date = stamp => new Date(stamp * 1000).toLocaleString('zh-CN', {hour12:false});
 const splitTags = value => value.split(/[,，]/).map(item => item.trim()).filter(Boolean);
@@ -45,55 +45,68 @@ async function api(path, options={}) {
 }
 const guarded = fn => async (...args) => {try {return await fn(...args);} catch(error){toast(error.message,true);}};
 function options(id, values, empty=null) {const select=$(id);select.replaceChildren();if(empty!==null) select.add(new Option(empty,''));values.forEach(value=>select.add(new Option(value,value)));}
+function showLogin(){
+  if(state.uploading){toast('图片上传中，请等待当前批次完成。');return;}
+  $('auth-error').textContent='';$('password').value='';
+  $('app').classList.add('hidden');$('auth').classList.remove('hidden');$('username').focus();
+}
+function returnToLibrary(){
+  $('password').value='';$('auth-error').textContent='';$('auth').classList.add('hidden');$('app').classList.remove('hidden');
+}
+async function syncSession(){
+  if(!state.status||state.uploading)return false;
+  const status=await api('/api/status');
+  if(status.logged_in!==state.status.logged_in||status.role!==state.status.role||status.account_id!==state.status.account_id){await boot();return true;}
+  return false;
+}
+window.addEventListener('focus',()=>guarded(syncSession)());
 async function boot() {
+  const sequence=++state.bootRequest;
   try {
-    state.status=await api('/api/status');$('loading').classList.add('hidden');
-    if (!state.status.logged_in) {
-      $('token-secret').value='';$('new-token').classList.add('hidden');$('token-scope').value='read';
-      $('app').classList.add('hidden');$('auth').classList.remove('hidden');
-      document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());
-      const setup=!state.status.configured;
-      $('auth-title').textContent=setup?'建立你的素材空间':'欢迎回来';
-      $('auth-description').textContent=setup?'创建一个管理员账号，开始管理产品图片。':'登录后，继续整理你的产品素材。';
-      $('auth-submit').innerHTML=setup?'创建并进入 <span>→</span>':'进入素材库 <span>→</span>';
-      $('confirm-wrap').classList.toggle('hidden',!setup);$('password-confirm').required=setup;
-      $('password').minLength=setup?10:1;$('password').autocomplete=setup?'new-password':'current-password';
-      $('auth-error').textContent='';$('auth-submit').disabled=setup&&!state.status.can_setup;
-      $('auth-note').textContent=setup?'密码至少 10 位。原图与产品资料将保存到云端。':'账号仅用于这套素材库。请使用独立密码。';
-      if (setup&&!state.status.can_setup) {$('auth-description').textContent='云端资料正在准备，请稍后刷新。';}
-      return;
+    const previous=state.status,status=await api('/api/status');
+    if(sequence!==state.bootRequest)return;
+    state.status=status;
+    if(previous&&(previous.role!==status.role||previous.logged_in!==status.logged_in||previous.account_id!==status.account_id)){
+      invalidateProductOptions();detailState.request++;state.request++;state.productRequest++;
+      state.selected.clear();document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());
+      $('token-secret').value='';$('new-token').classList.add('hidden');$('token-list').innerHTML='';$('activity-table').innerHTML='';$('account-table').innerHTML='';$('account-password').value='';$('account-error').textContent='';
     }
-    $('auth').classList.add('hidden');$('app').classList.remove('hidden');
-    const role=state.status.role;
-    const canEdit=role==='admin';
-    const isStaff=role==='admin'||role==='staff';
+    $('loading').classList.add('hidden');$('auth').classList.add('hidden');$('app').classList.remove('hidden');
+    const role=status.role||'anonymous',canEdit=role==='admin',isStaff=canEdit||role==='staff';
     $('app').classList.toggle('viewer',!isStaff);
-    const roleLabel=role==='admin'?'素材管理员':role==='staff'?'内部成员':'外部访客';
-    document.querySelector('.profile>span:nth-child(2)>span').textContent=roleLabel;
-    // Upload, edit and trash belong to internal accounts; token pages only need staff.
-    document.body.classList.toggle('external-view',role==='external');
-    document.querySelectorAll('.admin-only').forEach(element=>element.classList.toggle('hidden',!canEdit));
-    document.querySelectorAll('.staff-only').forEach(element=>element.classList.toggle('hidden',!isStaff));
-    document.querySelectorAll('.internal-only').forEach(element=>element.classList.toggle('hidden',!isStaff));
+    document.body.classList.toggle('external-view',!isStaff);
+    $('profile-role').textContent=canEdit?'素材管理员':role==='staff'?'内部成员':role==='external'?'外部访客':'未登录访客';
+    $('profile-avatar').textContent=canEdit?'管':role==='staff'?'员':'访';
+    $('profile-action').textContent=status.logged_in?'退出登录':'登录账号';
+    $('profile-icon').innerHTML=icon(status.logged_in?'logout':'lock');
+    $('logout').setAttribute('aria-label',status.logged_in?'退出素材账号登录':'登录素材账号');
+    $('login-entry').classList.toggle('hidden',status.logged_in);
+    for(const [selector,visible] of [['.admin-only',canEdit],['.staff-only',isStaff],['.internal-only',isStaff]])document.querySelectorAll(selector).forEach(el=>el.classList.toggle('hidden',!visible));
     document.querySelector('[data-view="trash"]').classList.toggle('hidden',!canEdit);
-    if(!isStaff&&!['library','unassigned','products'].includes(state.view))state.view='library';
-    for(const prefix of ['filter','upload','detail']) {
-      options(prefix+'-kind',state.status.kinds,prefix==='filter'?'全部类型':null);
-      options(prefix+'-angle',state.status.angles,prefix==='filter'?'全部角度':null);
-      options(prefix+'-background',state.status.backgrounds,prefix==='filter'?'全部背景':null);
+    if((!isStaff&&!['library','unassigned','products'].includes(state.view))||(!canEdit&&['team','trash','activity'].includes(state.view)))state.view='library';
+    for(const prefix of ['filter','upload','detail']){
+      options(prefix+'-kind',status.kinds,prefix==='filter'?'全部类型':null);
+      options(prefix+'-angle',status.angles,prefix==='filter'?'全部角度':null);
+      options(prefix+'-background',status.backgrounds,prefix==='filter'?'全部背景':null);
     }
     $('upload-background').value='透明';$('server-origin').textContent=location.origin;
+    $('token-scope').value='read';$('confirm-wrap').classList.add('hidden');$('password-confirm').required=false;
     await switchView(state.view);
-  } catch(error) {$('loading').innerHTML=`${icon('info')}<p>连接未完成：${escapeHtml(error.message)}</p><button class="button secondary" id="retry-connection">重试</button>`;$('retry-connection').onclick=boot;}
+  }catch(error){$('app').classList.add('hidden');$('loading').classList.remove('hidden');$('loading').innerHTML=`${icon('info')}<p>连接未完成：${escapeHtml(error.message)}</p><button class="button secondary" id="retry-connection">重试</button>`;$('retry-connection').onclick=boot;}
 }
+$('login-entry').onclick=showLogin;$('cancel-login').onclick=returnToLibrary;
 $('auth-form').addEventListener('submit',async event=>{
-  event.preventDefault();const setup=!state.status.configured;
-  if(setup&&$('password').value!==$('password-confirm').value){$('auth-error').textContent='两次输入的密码不一致。';return;}
-  $('auth-submit').disabled=true;$('auth-error').textContent='';
-  try {await api(setup?'/api/setup':'/api/login',{method:'POST',body:JSON.stringify({username:$('username').value.trim(),password:$('password').value})});$('password').value='';$('password-confirm').value='';await boot();}
-  catch(error){$('auth-error').textContent=error.message;}finally{$('auth-submit').disabled=false;}
+  event.preventDefault();$('auth-submit').disabled=true;$('auth-error').textContent='';
+  try{
+    await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value.trim(),password:$('password').value})});
+    $('password').value='';await boot();toast('已登录，功能已按账号权限更新。');
+  }catch(error){$('auth-error').textContent=error.message;}finally{$('auth-submit').disabled=false;}
 });
-$('logout').onclick=guarded(async()=>{await api('/api/logout',{method:'POST'});invalidateProductOptions();state.selected.clear();$('selection-bar').classList.add('hidden');$('token-secret').value='';$('new-token').classList.add('hidden');await boot();});
+$('logout').onclick=guarded(async()=>{
+  if(!state.status?.logged_in){showLogin();return;}
+  if(state.uploading){toast('图片上传中，请等待当前批次完成。');return;}
+  await api('/api/logout',{method:'POST'});await boot();toast('已退出登录，可继续查询和下载素材。');
+});
 const viewInfo={library:['全部图片','YOUR PRODUCT ASSETS','每个产品，都有清晰的素材归属。'],unassigned:['待整理','A LITTLE ORGANIZATION','为这些图片关联产品，让下一次查找更准确。'],products:['产品目录','THE PRODUCT INDEX','用 SKU、名称与别名，建立统一的产品索引。'],integrations:['AI 取图','CONNECT YOUR WORKFLOW','让智能体通过受控接口，找到你需要的素材。'],activity:['操作记录','WORKSPACE ACTIVITY','上传、下载与资料修改，都有迹可循。'],team:['账号管理','TEAM ACCESS','内部成员可派发令牌，外部客户只能凭账号浏览下载。'],trash:['回收站','A SECOND CHANCE','移入回收站的图片仍保留原文件，可随时恢复。']};
 function clearPageSearch() {
   delayedImageSearch.cancel();delayedProductSearch.cancel();
@@ -109,7 +122,7 @@ function clearPageSearch() {
 }
 async function switchView(view, {productCode=''}={}) {
   const staffNow=state.status.role==='admin'||state.status.role==='staff';
-  if(!staffNow&&['integrations','activity','team','trash'].includes(view))view='library';
+  if((!staffNow&&['integrations','activity','team','trash'].includes(view))||(state.status.role!=='admin'&&['activity','team','trash'].includes(view)))view='library';
   if(state.view==='integrations'&&view!=='integrations') {$('token-secret').value='';$('new-token').classList.add('hidden');}
   const navigation=++state.navigationRequest;
   clearPageSearch();
@@ -128,7 +141,7 @@ async function switchView(view, {productCode=''}={}) {
 }
 // Delegate on the whole sidebar: some entries (账号管理) sit outside <nav>.
 document.querySelector('.sidebar').addEventListener('click',event=>{const button=event.target.closest('[data-view]');if(button)guarded(switchView)(button.dataset.view);});
-$('refresh').onclick=guarded(async()=>{invalidateProductOptions();await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products'){await loadProductCategories();await loadProducts();}else if(state.view==='activity')await loadAudit();else if(state.view==='team')await loadTeam();else await loadTokens();toast('已刷新');});
+$('refresh').onclick=guarded(async()=>{if(await syncSession()){toast('登录状态已更新');return;}invalidateProductOptions();await loadOverview();if(['library','unassigned','trash'].includes(state.view))await loadImages();else if(state.view==='products'){await loadProductCategories();await loadProducts();}else if(state.view==='activity')await loadAudit();else if(state.view==='team')await loadTeam();else await loadTokens();toast('已刷新');});
 async function loadOverview() {
   const result=await api('/api/overview');
   for(const [key,label] of [['images','张'],['products','个'],['transparent','张']]) $('stat-'+key).innerHTML=result[key].toLocaleString()+'<small>'+label+'</small>';
@@ -494,27 +507,27 @@ $('detail-trash').onclick=guarded(async()=>{if(!confirm('将这张图片移入�
 const confirmPermanentDelete=ids=>confirm(`永久删除 ${ids.length} 张图片？\n\n原文件会从磁盘移除，无法恢复，请先确认已有备份。`);
 $('batch-delete').onclick=guarded(async()=>{const ids=[...state.selected];if(!ids.length)return;if(ids.length>100){toast('每次最多永久删除 100 张，请减少选择。',true);return;}if(!confirmPermanentDelete(ids))return;await permanentlyDelete(ids);});
 async function loadTeam() {
-  const network=await api("/api/network");
+  const network=await api("/api/network");if(state.status.role!=="admin")return;
   const port=location.port?(location.port==="80"||location.port==="443"?"":":"+location.port):"";
   const urls=(network.addresses||[]).map(ip=>`${location.protocol}//${ip}${port}`);
   const current=location.hostname;
   const chosen=network.public_origin||urls.find(url=>url.includes("//"+current+port))||urls[0]||location.origin;
   $("team-address").textContent=chosen;
-  $("team-address-note").textContent="请先在 Sites 站点设置中授予同事访问权限，再为其创建素材库账号。";
+  $("team-address-note").textContent="公司工作空间成员可直接浏览和下载；需要管理素材时，再创建对应角色的素材账号。";
   await loadAccounts();
 }
 async function loadAccounts(){
-  const result=await api("/api/accounts");
+  const result=await api("/api/accounts");if(state.status.role!=="admin")return;
   const rows=result.items.map(item=>{
     const staff=item.role==="staff";
     const name=escapeHtml(item.username);
-    const rights=staff?"浏览 · 下载 · 上传 · 创建令牌":"浏览 · 下载";
+    const rights=staff?"浏览 · 下载 · 上传 · 产品管理 · 图片关联 · 创建取图令牌":"浏览 · 下载";
     return `<tr><td><strong>${name}</strong></td><td>${staff?"内部账号":"外部账号"}</td>`+
       `<td class="subtext">${rights}</td><td class="subtext">${date(item.created_at)}</td>`+
       `<td><button class="text-button" data-reset-account="${item.id}" data-account-name="${name}">重置密码</button> `+
       `<button class="text-button danger" data-delete-account="${item.id}" data-account-name="${name}">删除</button></td></tr>`;
   }).join("");
-  const empty="<p class=\"small\">还没有创建任何账号。同事和客户目前只能使用管理员账号登录。</p>";
+  const empty="<p class=\"small\">还没有创建任何账号。浏览和下载无需素材账号；可按管理需求创建内部账号。</p>";
   $("account-table").innerHTML=rows?`<div class="table-wrap"><table><thead><tr><th>账号</th><th>类型</th><th>可用权限</th><th>创建时间</th><th>管理</th></tr></thead><tbody>${rows}</tbody></table></div>`:empty;
 }
 $("copy-address").onclick=guarded(async()=>{const text=$("team-address").textContent;if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(text);else{const input=document.createElement("textarea");input.value=text;document.body.append(input);input.select();document.execCommand("copy");input.remove();}toast("访问地址已复制");});
@@ -548,9 +561,9 @@ $("account-table").onclick=guarded(async event=>{
     toast(`账号「${name}」已删除`);await loadAccounts();
   }
 });
-async function loadTokens(){const result=await api('/api/tokens');$('token-list').innerHTML=result.items.map(item=>{const meta=[escapeHtml(item.prefix)+'••••',item.scope==='products:create+images:associate'?'可新建产品和关联图片':item.scope==='products:create'?'可新建产品':item.scope==='images:associate'?'可关联图片':'查询下载'+(item.owner?' / 上传':''),date(item.created_at),item.last_used_at?'最后使用 '+date(item.last_used_at):'尚未使用',item.owner&&state.status.role==='admin'?'由 '+escapeHtml(item.owner)+' 创建':''].filter(Boolean).join(' · ');return `<div class="token-item"><div>${escapeHtml(item.name)}<small>${meta}</small></div><button class="text-button danger" data-revoke="${item.id}">撤销</button></div>`;}).join('')||'<p class="small">还没有访问令牌。</p>';}
+async function loadTokens(){const result=await api('/api/tokens');if(!['admin','staff'].includes(state.status.role))return;$('token-list').innerHTML=result.items.map(item=>{const meta=[escapeHtml(item.prefix)+'••••',item.scope==='products:create+images:associate'?'可新建产品和关联图片':item.scope==='products:create'?'可新建产品':item.scope==='images:associate'?'可关联图片':'查询下载'+(item.owner?' / 上传':''),date(item.created_at),item.last_used_at?'最后使用 '+date(item.last_used_at):'尚未使用',item.owner&&state.status.role==='admin'?'由 '+escapeHtml(item.owner)+' 创建':''].filter(Boolean).join(' · ');return `<div class="token-item"><div>${escapeHtml(item.name)}<small>${meta}</small></div><button class="text-button danger" data-revoke="${item.id}">撤销</button></div>`;}).join('')||'<p class="small">还没有访问令牌。</p>';}
 $('token-form').onsubmit=guarded(async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const scope=state.status.role==='admin'?$('token-scope').value:'read';const result=await api('/api/tokens',{method:'POST',body:JSON.stringify({name:$('token-name').value,scope})});$('token-secret').value=result.token;$('new-token').classList.remove('hidden');$('token-name').value='';await loadTokens();}finally{button.disabled=false;}});
 $('copy-token').onclick=guarded(async()=>{const input=$('token-secret');if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(input.value);else{input.select();if(!document.execCommand('copy'))throw new Error('请选中令牌手动复制。');}toast('令牌已复制，请保存在工具的凭据配置中。');});
 $('token-list').onclick=guarded(async event=>{const button=event.target.closest('[data-revoke]');if(!button||!confirm('撤销后，使用此令牌的工具将失去相应授权。确定撤销？'))return;await api('/api/tokens/'+button.dataset.revoke,{method:'DELETE'});await loadTokens();toast('令牌已撤销');});
-async function loadAudit(){const result=await api('/api/audit');$('activity-table').innerHTML=`<div class="table-wrap"><table><thead><tr><th>操作</th><th>操作者</th><th>对象 / 详情</th><th>时间</th></tr></thead><tbody>${result.items.map(item=>`<tr><td><strong>${escapeHtml(item.action)}</strong></td><td>${item.actor==='admin'?'管理员':item.actor==='访客'?'访客账号':'授权工具'}</td><td><span class="subtext">${escapeHtml(item.detail||'—')}</span></td><td>${date(item.created_at)}</td></tr>`).join('')||'<tr><td colspan="4" class="table-empty">还没有操作记录。</td></tr>'}</tbody></table></div><p class="subtext">显示最近 100 条记录。</p>`;}
+async function loadAudit(){const result=await api('/api/audit');if(state.status.role!=='admin')return;$('activity-table').innerHTML=`<div class="table-wrap"><table><thead><tr><th>操作</th><th>操作者</th><th>对象 / 详情</th><th>时间</th></tr></thead><tbody>${result.items.map(item=>`<tr><td><strong>${escapeHtml(item.action)}</strong></td><td>${item.actor==='anonymous'?'未登录访客':item.actor==='admin'||item.actor.startsWith('admin:')?'管理员':item.actor.startsWith('staff:')?'内部成员':item.actor==='访客'||item.actor.startsWith('external:')?'外部访客':'授权工具'}</td><td><span class="subtext">${escapeHtml(item.detail||'—')}</span></td><td>${date(item.created_at)}</td></tr>`).join('')||'<tr><td colspan="4" class="table-empty">还没有操作记录。</td></tr>'}</tbody></table></div><p class="subtext">显示最近 100 条记录。</p>`;}
 boot();

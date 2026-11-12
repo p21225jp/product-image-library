@@ -26,7 +26,8 @@ db.prepare('INSERT INTO settings(key,value) VALUES(?,?)').run('username','testad
 let calls=0;
 async function call(path,method='GET',body,auth='',expected=200,extra={}){const req=new Request('https://library.test'+path,{method,headers:{...(body?{'Content-Type':'application/json'}:{}),...(auth.startsWith('img_')?{Authorization:'Bearer '+auth}:auth?{Cookie:auth}:{}),...extra},...(body?{body:JSON.stringify(body)}:{})});const r=await handleLibrary(req,env);const value=await r.json();assert.equal(r.status,expected,`${method} ${path}: ${JSON.stringify(value)}`);calls++;return {value,response:r};}
 const login=await call('/api/login','POST',{username:'testadmin',password:pass});const admin=login.response.headers.get('set-cookie').split(';')[0];assert.match(admin,/asset_session=/);
-await call('/api/products','GET',null,'',401);
+await call('/api/products','GET',null,'');
+const guestStatus=(await call('/api/status','GET')).value;assert.equal(guestStatus.logged_in,false);assert.equal(guestStatus.role,'anonymous');assert.equal(guestStatus.can_create_products,false);assert.equal(guestStatus.can_associate_images,false);
 await call('/api/products','POST',{code:'evil',name:'bad'},admin,403,{Origin:'https://evil.test'});
 await call('/api/categories','POST',{name:'主板'},admin);
 const p1=(await call('/api/products','POST',{code:'001234',name:'测试主板',category:'主板',aliases:['黑色']},admin)).value;
@@ -75,6 +76,27 @@ const key='a'.repeat(32),data=Buffer.from('fixture original data'),digest=create
 db.prepare('INSERT INTO images(id,product_id,original_name,extension,mime_type,width,height,size,sha256,kind,angle,background,has_alpha,tags,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(key,null,'1234-file.png','png','image/png',2000,2000,data.length,digest,'产品图','正面','透明',1,'[]',1);
 await BUCKET.put('originals/'+key+'.png',data,{customMetadata:{sha256:digest}});await BUCKET.put('thumbnails/'+key+'.webp',data,{});
 assert.equal((await call('/api/images?filename=1234','GET',null,admin)).value.total,1);
+assert.equal((await call('/api/images?filename=1234','GET')).value.total,1);
+assert.equal((await call('/api/images/'+key,'GET')).value.original_name,'1234-file.png');
+await call('/api/overview','GET');await call('/api/categories','GET');
+for(const path of ['/api/network','/api/accounts','/api/tokens','/api/audit','/api/categories/manage','/api/categories/deletion-preview?name=主板','/api/products/'+p1.id+'/deletion-preview','/api/openapi.json'])await call(path,'GET',null,'',401);
+for(const [path,method,body] of [
+ ['/api/products','POST',{code:'anon-denied',name:'Denied'}],['/api/products/'+p1.id,'PUT',{}],['/api/products/'+p1.id,'DELETE',{}],
+ ['/api/images/upload','POST',{}],['/api/images/'+key,'PUT',{}],['/api/images/'+key,'DELETE',{}],['/api/images/'+key+'/restore','POST',{}],['/api/images/delete','POST',{image_ids:[key]}],
+ ['/api/products/'+p1.id+'/images/associate','POST',{image_ids:[key]}],['/api/categories','POST',{name:'Denied'}],['/api/categories','PUT',{}],['/api/categories','DELETE',{}],
+ ['/api/accounts','POST',{}],['/api/accounts/'+staff.id,'PUT',{}],['/api/accounts/'+staff.id,'DELETE',{}],['/api/tokens','POST',{}],['/api/tokens/'+'0'.repeat(32),'DELETE',{}]
+])await call(path,method,body,'',401);
+await call('/api/products','GET',null,'img_invalid',401);
+await call('/api/export','POST',{image_ids:[key]},'img_invalid',401);
+await call('/api/images?trash=true','GET',null,'',403);
+await call('/api/export','POST',{image_ids:[key]},'',403,{Origin:'https://evil.test'});
+const guestOriginal=await handleLibrary(new Request('https://library.test/api/images/'+key+'/file'),env);
+assert.equal(guestOriginal.status,200);assert.deepEqual(Buffer.from(await guestOriginal.arrayBuffer()),data);
+const guestThumb=await handleLibrary(new Request('https://library.test/api/images/'+key+'/file?variant=thumbnail'),env);assert.equal(guestThumb.status,200);
+const guestZip=await handleLibrary(new Request('https://library.test/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_ids:[key]})}),env);assert.equal(guestZip.status,200);assert(Buffer.from(await guestZip.arrayBuffer()).includes(data));
+assert(db.prepare("SELECT id FROM audit WHERE actor='anonymous' AND action='下载原图'").get());
+await call('/api/logout','POST',{},'');
+
 const combinedScope='products:create+images:associate';
 await call('/api/tokens','POST',{name:'No escalation',scope:combinedScope},sc,403);
 await call('/api/tokens','POST',{name:'No external grants',scope:combinedScope},ec,403);
@@ -147,13 +169,13 @@ const renamed=(await call('/api/categories/deletion-preview?name=主板新品','
 await call('/api/categories','DELETE',{name:'主板新品',preview_token:renamed.preview_token},admin);
 assert.equal(db.prepare('SELECT product_id FROM images WHERE id=?').get(key).product_id,null);
 await call('/api/images/delete','POST',{image_ids:[key]},admin,409);await call('/api/images/'+key,'DELETE',null,admin);
-await call('/api/images?trash=true','GET',null,ec,403);await call('/api/images/'+key+'/restore','POST',{},admin);
+await call('/api/images/'+key,'GET',null,'',404);await call('/api/images/'+key+'/file','GET',null,'',404);await call('/api/images/'+key+'/file?variant=thumbnail','GET',null,'',404);await call('/api/export','POST',{image_ids:[key]},'',404);await call('/api/images?trash=true','GET',null,ec,403);await call('/api/images/'+key+'/restore','POST',{},admin);
 await call('/api/images/'+key,'DELETE',null,admin);await call('/api/images/delete','POST',{image_ids:[key]},admin);assert.equal(files.size,0);
 const st=(await call('/api/tokens','POST',{name:'staff token'},sc)).value.token;
-await call('/api/accounts/'+staff.id,'DELETE',null,admin);await call('/api/products','GET',null,sc,401);await call('/api/products','GET',null,st,401);
-await call('/api/accounts/'+external.id,'PUT',{password:'new-test-password-456'},admin);await call('/api/products','GET',null,ec,401);
+await call('/api/accounts/'+staff.id,'DELETE',null,admin);await call('/api/products','GET',null,sc);await call('/api/products','POST',{code:'expired-staff',name:'Denied'},sc,401);await call('/api/products','GET',null,st,401);
+await call('/api/accounts/'+external.id,'PUT',{password:'new-test-password-456'},admin);await call('/api/products','GET',null,ec);assert.equal((await call('/api/status','GET',null,ec)).value.logged_in,false);
 await call('/api/migration/verify','GET',null,'',401);
 await call('/api/migration/records','POST',{},admin,404);
 await call('/api/migration/complete','POST',{},admin,404);
-await call('/api/logout','POST',{},admin);await call('/api/products','GET',null,admin,401);
+await call('/api/logout','POST',{},admin);await call('/api/products','GET',null,admin);assert.equal((await call('/api/status','GET',null,admin)).value.role,'anonymous');
 console.log(`PASS: ${calls} API assertions plus original byte equality, streaming ZIP, role isolation and transactional delete guards.`);
