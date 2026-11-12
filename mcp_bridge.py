@@ -25,6 +25,7 @@ class LibraryToolError(ToolError, ValueError):
 SERVER_URL = os.environ.get('ASSET_SERVER_URL', 'http://127.0.0.1:8750').rstrip('/')
 API_TOKEN = os.environ.get('ASSET_API_TOKEN', '')
 WRITE_API_TOKEN = os.environ.get('ASSET_WRITE_API_TOKEN', '')
+ASSOCIATE_API_TOKEN = os.environ.get('ASSET_ASSOCIATE_API_TOKEN', '')
 SITES_TOKEN = os.environ.get('ASSET_SITES_TOKEN', '')
 EXPORT_DIR = Path(os.environ.get('ASSET_EXPORT_DIR', Path(__file__).parent / 'exports')).resolve()
 MAX_ZIP_CONTENT_BYTES = 500 * 1024 * 1024
@@ -37,10 +38,12 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 server = MCPServer('product-image-library', log_level='WARNING')
 
 
-def client(write: bool = False):
-    token = WRITE_API_TOKEN if write else API_TOKEN
+def client(write: bool = False, associate: bool = False):
+    token = (ASSOCIATE_API_TOKEN or WRITE_API_TOKEN) if associate else WRITE_API_TOKEN if write else API_TOKEN
+    if associate and not token:
+        raise LibraryToolError('请配置管理员联合写入令牌 ASSET_WRITE_API_TOKEN；旧版独立关联令牌可继续使用 ASSET_ASSOCIATE_API_TOKEN。')
     if write and not token:
-        raise LibraryToolError('新建产品需要管理员签发的 products:create 令牌，请配置 ASSET_WRITE_API_TOKEN。')
+        raise LibraryToolError('新建产品需要管理员写入授权，请配置 ASSET_WRITE_API_TOKEN。')
     if not token:
         raise LibraryToolError('请先在素材库「AI 取图」中创建只读令牌，并配置 ASSET_API_TOKEN。')
     headers = {'Authorization': 'Bearer ' + token}
@@ -89,6 +92,30 @@ def create_product(sku: str, name: str, category: str = '', aliases: list[str] |
             return response_json(session.post('/api/products', json={'code': sku, 'name': name, 'category': category, 'aliases': aliases}))
     except httpx.HTTPError:
         raise LibraryToolError('网络请求未正常完成。请先按 SKU 查询产品是否已创建，再决定是否重试。') from None
+
+
+@server.tool(structured_output=True, annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+def associate_images(product_sku: str, image_ids: list[str]) -> dict[str, Any]:
+    """管理员授权后，将 1～100 张已上传图片关联到指定产品 SKU。SKU 保留前导零。重复关联同一产品会跳过；任一图片已属于其他产品、在回收站或不存在时整批拒绝。不新建产品、不改绑、不修改图片类型、角度、标签或原文件。"""
+    if not isinstance(product_sku, str) or not product_sku.strip() or len(product_sku) > 80:
+        raise LibraryToolError('产品 SKU 必须为不超过 80 个字符的非空字符串。')
+    if not isinstance(image_ids, list) or not 1 <= len(image_ids) <= 100 or any(not isinstance(x, str) for x in image_ids):
+        raise LibraryToolError('每次请选择 1～100 张有效图片。')
+    ids = [identifier(x) for x in dict.fromkeys(image_ids)]
+    import unicodedata
+    sku = unicodedata.normalize('NFKC', product_sku).strip()
+    try:
+        with client(associate=True) as session:
+            result = response_json(session.get('/api/products', params={'q': sku, 'limit': 100, 'offset': 0}))
+            products = [p for p in result.get('items', []) if p['code'].casefold() == sku.casefold()]
+            if len(products) != 1:
+                raise LibraryToolError('未找到唯一的对应产品 SKU，请先核对产品目录。')
+            product = products[0]
+            product_id = identifier(product['id'])
+            result = response_json(session.post('/api/products/' + product_id + '/images/associate', json={'image_ids': ids}))
+            return {**result, 'product_sku': product['code'], 'product_name': product['name'], 'image_ids': ids}
+    except httpx.HTTPError:
+        raise LibraryToolError('网络请求未正常完成。请先查询图片当前归属；同一产品的关联可安全重试。') from None
 
 
 @server.tool(structured_output=True, annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
